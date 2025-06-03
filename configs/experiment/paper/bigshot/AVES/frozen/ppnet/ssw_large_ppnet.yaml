@@ -21,7 +21,7 @@ train: true
 test: true
 
 logger:
-  experiment_name: full_sne
+  experiment_name: full_ssw
   run_name: birdAVES_frozen_ssw_ppnet_allshot_${seed}_${start_time}
 
 data:
