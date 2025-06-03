@@ -128,6 +128,6 @@ python train.py experiment="paper/fewshot/$probing/$probing/$dataset_kshots"
 ```
 
 ## Checkpoints
-- [Bird-MAE Base:](https://huggingface.co/anonymous-birder/Bird-MAE/blob/main/Bird-MAE-B)
-- [Bird-MAE Large:](https://huggingface.co/anonymous-birder/Bird-MAE/blob/main/Bird-MAE-L)
-- [Bird-MAE Huge:](https://huggingface.co/anonymous-birder/Bird-MAE/blob/main/Bird-MAE-H)
+- [Bird-MAE Base](https://huggingface.co/anonymous-birder/Bird-MAE/blob/main/Bird-MAE-B)
+- [Bird-MAE Large](https://huggingface.co/anonymous-birder/Bird-MAE/blob/main/Bird-MAE-L)
+- [Bird-MAE Huge](https://huggingface.co/anonymous-birder/Bird-MAE/blob/main/Bird-MAE-H)
