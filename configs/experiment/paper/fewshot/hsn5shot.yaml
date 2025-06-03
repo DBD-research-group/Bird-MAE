@@ -31,7 +31,7 @@ data:
       shuffle: true
       drop_last: true
   dataset:
-   save_to_disk: /home/lrauch/projects/birdMAE/data/HSN/HSN_5shot_1
+   save_to_disk: /home/anonymous/projects/birdMAE/data/HSN/HSN_5shot_1
 
 seed: 1
 

@@ -64,7 +64,7 @@ module:
       decay_type: right
       
   network:
-    pretrained_weights_path: /home/lrauch/mnt_check/pretrain_xcl_large_swin/runs/XCL/AudioMAE/2024-12-11_225649/callback_checkpoints/AudioMAE_XCL_epoch=99.ckpt
+    pretrained_weights_path: /home/anonymous/mnt_check/pretrain_xcl_large_swin/runs/XCL/AudioMAE/2024-12-11_225649/callback_checkpoints/AudioMAE_XCL_epoch=99.ckpt
     ema_update_rate: null
     freeze_backbone: false
       

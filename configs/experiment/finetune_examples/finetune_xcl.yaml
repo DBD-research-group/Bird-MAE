@@ -51,7 +51,7 @@ trainer:
 
 module:
   network:
-    pretrained_weights_path: /home/lrauch/AudioMAE_XCL_epoch=99_mixup_l.ckpt
+    pretrained_weights_path: /home/anonymous/AudioMAE_XCL_epoch=99_mixup_l.ckpt
   optimizer:
     target:
       #lr: 5e-5

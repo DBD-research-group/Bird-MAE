@@ -64,7 +64,7 @@ def smart_sampling( dataset, label_name, class_limit, event_limit):
     return dataset.select(limited_indices)
 
 
-ds = load_dataset("DBD-research-group/BirdSet", "XCM", cache_dir="/home/lrauch/projects/birdMAE/data/XCM", num_proc=4)
+ds = load_dataset("DBD-research-group/BirdSet", "XCM", cache_dir="/home/anonymous/projects/birdMAE/data/XCM", num_proc=4)
 ds["train"] = ds["train"].select(range(10_000))
 
 ds = ds["train"].cast_column(
@@ -102,4 +102,4 @@ ds_dict = DatasetDict({
 })
 
 
-ds_dict.save_to_disk("/home/lrauch/projects/birdMAE/data/XCM/XCM_processed_100_1events_ogg")
+ds_dict.save_to_disk("/home/anonymous/projects/birdMAE/data/XCM/XCM_processed_100_1events_ogg")

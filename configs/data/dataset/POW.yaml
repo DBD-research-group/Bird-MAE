@@ -12,16 +12,16 @@ columns: ["filepath", "labels", "detected_events", "start_time", "end_time"]
 target_length: 512 #dopplung in melscale! change!
 mean: -7.2
 std: 4.43
-# save_to_disk: /home/lrauch/projects/birdMAE/data/HSN/HSN_processed_42_df93c4dd1f3e8a6b
-# save_to_disk: /home/lrauch/projects/birdMAE/data/HSN/HSN_processed_42_c205f09fc5635d1e
-#save_to_disk: /home/lrauch/projects/birdMAE/data/HSN/HSN_processed_42_cdb073221fc18e3d
+# save_to_disk: /home/anonymous/projects/birdMAE/data/HSN/HSN_processed_42_df93c4dd1f3e8a6b
+# save_to_disk: /home/anonymous/projects/birdMAE/data/HSN/HSN_processed_42_c205f09fc5635d1e
+#save_to_disk: /home/anonymous/projects/birdMAE/data/HSN/HSN_processed_42_cdb073221fc18e3d
 
-#save_to_disk: /home/lrauch/projects/birdMAE/data/POW/POW_processed_42_38d2b8b85681b12a
-#save_to_disk: /home/lrauch/projects/birdMAE/data/POW/POW_64shot_n
-save_to_disk: /home/lrauch/projects/birdMAE/data/POW/POW_64shot_n
-#save_to_disk: /home/lrauch/projects/birdMAE/data/POW/POW_5shot
-#save_to_disk: /home/lrauch/projects/birdMAE/data/HSN/HSN_processed_42_876267698be39955
-#save_to_disk: /home/lrauch/projects/birdMAE/data/HSN/HSN_processed_42_876267698be39955_removesub5
+#save_to_disk: /home/anonymous/projects/birdMAE/data/POW/POW_processed_42_38d2b8b85681b12a
+#save_to_disk: /home/anonymous/projects/birdMAE/data/POW/POW_64shot_n
+save_to_disk: /home/anonymous/projects/birdMAE/data/POW/POW_64shot_n
+#save_to_disk: /home/anonymous/projects/birdMAE/data/POW/POW_5shot
+#save_to_disk: /home/anonymous/projects/birdMAE/data/HSN/HSN_processed_42_876267698be39955
+#save_to_disk: /home/anonymous/projects/birdMAE/data/HSN/HSN_processed_42_876267698be39955_removesub5
 
 test_in_val: true
 saved_images: null

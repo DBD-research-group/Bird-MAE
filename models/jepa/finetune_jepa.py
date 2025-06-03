@@ -90,7 +90,7 @@ def finetune(cfg: DictConfig):
     if cfg.train: 
         log.info("Start training")
         trainer.fit(model=model, datamodule=datamodule) 
-                    #,ckpt_path="/home/lrauch/projects/birdMAE/logs/finetune/runs/audioset_balanced/VIT/2024-10-14_170415/model_checkpoints/last.ckpt")
+                    #,ckpt_path="/home/anonymous/projects/birdMAE/logs/finetune/runs/audioset_balanced/VIT/2024-10-14_170415/model_checkpoints/last.ckpt")
 
     if cfg.test:
         log.info("Start testing")

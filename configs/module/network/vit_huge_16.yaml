@@ -16,8 +16,8 @@ drop_path: 0.1
 num_classes: ${data.dataset.num_classes} 
 pos_trainable: False
 
-#pretrained_weights_path: /home/lrauch/mnt_check/pretrain_xcl_wave_huge/runs/XCL/AudioMAE/2025-01-05_145126/callback_checkpoints/AudioMAE_XCL_epoch=94.ckpt
-pretrained_weights_path: /home/lrauch/AudioMAE_huge_XCL_ep99.ckpt
+#pretrained_weights_path: /home/anonymous/mnt_check/pretrain_xcl_wave_huge/runs/XCL/AudioMAE/2025-01-05_145126/callback_checkpoints/AudioMAE_XCL_epoch=94.ckpt
+pretrained_weights_path: /home/anonymous/AudioMAE_huge_XCL_ep99.ckpt
 target_length: ${data.dataset.target_length}
 mask2d: ${data.transform.mask2d}
 mask_t_prob: ${data.transform.mask_t_prob}

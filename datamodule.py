@@ -140,7 +140,7 @@ class HFDataModule(pl.LightningDataModule):
                     )
 
                     if "AudioSet" in self.hf_path:
-                        with open("/home/lrauch/projects/birdMAE/data/audioset_ontology_custom527.json", "r") as f:
+                        with open("/home/anonymous/projects/birdMAE/data/audioset_ontology_custom527.json", "r") as f:
                             ontology = json.load(f)
                         num_classes = len(ontology)
                         label_names = list(ontology.keys())
@@ -200,7 +200,7 @@ class HFDataModule(pl.LightningDataModule):
                     self.test_data = load_dataset(self.hf_path, self.hf_name, split=self.test_split, cache_dir=self.data_dir)
 
                     if "AudioSet" in self.hf_path:
-                        with open("/home/lrauch/projects/birdMAE/data/audioset_ontology_custom527.json", "r") as f:
+                        with open("/home/anonymous/projects/birdMAE/data/audioset_ontology_custom527.json", "r") as f:
                             ontology = json.load(f)
                         num_classes = len(ontology)
                         label_names = list(ontology.keys())

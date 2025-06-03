@@ -29,7 +29,7 @@ module:
   network:
     name: VIT_ppnet
     mask_inference: ${data.dataset.hf_name}
-    pretrained_weights_path: /home/lrauch/projects/birdMAE/logs/finetune_xcm/runs/XCM/VIT_ppnet/2025-02-12_232547/callback_checkpoints/VIT_ppnet_XCM_epoch=09.ckpt
+    pretrained_weights_path: /home/anonymous/projects/birdMAE/logs/finetune_xcm/runs/XCM/VIT_ppnet/2025-02-12_232547/callback_checkpoints/VIT_ppnet_XCM_epoch=09.ckpt
     ppnet:
       num_prototypes: 4110
       init_weights: false

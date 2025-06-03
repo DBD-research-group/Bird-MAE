@@ -12,12 +12,12 @@
 #SBATCH --array=0-2%8
 
 date; hostname; pwd
-source /mnt/home/lrauch/.zshrc
+source /mnt/home/anonymous/.zshrc
 echo "Activate conda"
 conda activate gadme_v1
 echo $PYTHONPATH
 
-cd /mnt/home/lrauch/projects/birdMAE/
+cd /mnt/home/anonymous/projects/birdMAE/
 
 export CUDA_LAUNCH_BLOCKING=1
 export HYDRA_FULL_ERROR=1

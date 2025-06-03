@@ -64,7 +64,7 @@ module:
       decay_type: right
       
   network:
-    pretrained_weights_path: /home/lrauch/AudioMAE_XCL_epoch150_213828.ckpt
+    pretrained_weights_path: /home/anonymous/AudioMAE_XCL_epoch150_213828.ckpt
     ema_update_rate: null
     freeze_backbone: false
     global_pool: attentive

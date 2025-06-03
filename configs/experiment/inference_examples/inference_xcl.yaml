@@ -28,4 +28,4 @@ logger:
 module:
   network:
     mask_inference: ${data.dataset.hf_name}
-    pretrained_weights_path: /home/lrauch/VIT_XCL_epoch01_ft_from143556.ckpt
+    pretrained_weights_path: /home/anonymous/VIT_XCL_epoch01_ft_from143556.ckpt

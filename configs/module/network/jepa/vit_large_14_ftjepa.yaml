@@ -18,12 +18,12 @@ init_std: 0.02
 freeze_backbone: false
 num_classes: ${data.dataset.num_classes} 
 target_length: ${data.dataset.target_length}
-#pretrained_weights_path: /home/lrauch/projects/birdMAE/logs/pretrain_xcm_jepa/runs/XCM/A_JEPA/2025-01-06_174156/callback_checkpoints/A_JEPA_XCM_epoch=01.ckpt
-#pretrained_weights_path: /home/lrauch/projects/birdMAE/logs/pretrain_xcm_jepa/runs/XCM/A_JEPA/2025-01-08_114405/callback_checkpoints/A_JEPA_XCM_epoch=01.ckpt
+#pretrained_weights_path: /home/anonymous/projects/birdMAE/logs/pretrain_xcm_jepa/runs/XCM/A_JEPA/2025-01-06_174156/callback_checkpoints/A_JEPA_XCM_epoch=01.ckpt
+#pretrained_weights_path: /home/anonymous/projects/birdMAE/logs/pretrain_xcm_jepa/runs/XCM/A_JEPA/2025-01-08_114405/callback_checkpoints/A_JEPA_XCM_epoch=01.ckpt
 #pretrained_weights_path: null
-#pretrained_weights_path: /home/lrauch/projects/birdMAE/logs/pretrain_xcm_jepa/runs/XCM/A_JEPA/2025-01-07_161741/callback_checkpoints/A_JEPA_XCM_epoch=99.ckpt
-#pretrained_weights_path: /home/lrauch/projects/birdMAE/logs/pretrain_xcm_jepa/runs/XCM/A_JEPA/2025-01-09_125456/callback_checkpoints/A_JEPA_XCM_epoch=54.ckpt
-#pretrained_weights_path: /home/lrauch/mnt_check/pretrain_xcl_jepa/runs/XCL/A_JEPA/2025-01-08_182341/callback_checkpoints/A_JEPA_XCL_epoch=14.ckpt
-pretrained_weights_path: /home/lrauch/mnt_check/pretrain_xcl_jepa/runs/XCL/A_JEPA/2025-01-11_003844/callback_checkpoints/A_JEPA_XCL_epoch=64.ckpt
+#pretrained_weights_path: /home/anonymous/projects/birdMAE/logs/pretrain_xcm_jepa/runs/XCM/A_JEPA/2025-01-07_161741/callback_checkpoints/A_JEPA_XCM_epoch=99.ckpt
+#pretrained_weights_path: /home/anonymous/projects/birdMAE/logs/pretrain_xcm_jepa/runs/XCM/A_JEPA/2025-01-09_125456/callback_checkpoints/A_JEPA_XCM_epoch=54.ckpt
+#pretrained_weights_path: /home/anonymous/mnt_check/pretrain_xcl_jepa/runs/XCL/A_JEPA/2025-01-08_182341/callback_checkpoints/A_JEPA_XCL_epoch=14.ckpt
+pretrained_weights_path: /home/anonymous/mnt_check/pretrain_xcl_jepa/runs/XCL/A_JEPA/2025-01-11_003844/callback_checkpoints/A_JEPA_XCL_epoch=64.ckpt
 
-#/home/lrauch/projects/birdMAE/logs/pretrain_xcm_jepa/runs/XCM/A_JEPA/2025-01-07_161741
+#/home/anonymous/projects/birdMAE/logs/pretrain_xcm_jepa/runs/XCM/A_JEPA/2025-01-07_161741

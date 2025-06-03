@@ -128,17 +128,6 @@ python train.py experiment="paper/fewshot/$probing/$probing/$dataset_kshots"
 ```
 
 ## Checkpoints
-- Bird-MAE Base: Link
-- Bird-MAE Large: Link
-- Bird-MAE Huge: Link
-
-## Citation 
-```
-@article{rauch2025birdmae,
-      title={Can Masked Autoencoders Also Listen to Birds?}, 
-      author={Lukas Rauch and Ilyass Moummad and René Heinrich and Alexis Joly and Bernhard Sick and Christoph Scholz},
-      year={2025},
-      journal={arXiv:2504.12880},
-}
-```
-
+- [Bird-MAE Base:](https://huggingface.co/anonymous-birder/Bird-MAE/blob/main/Bird-MAE-B)
+- [Bird-MAE Large:](https://huggingface.co/anonymous-birder/Bird-MAE/blob/main/Bird-MAE-L)
+- [Bird-MAE Huge:](https://huggingface.co/anonymous-birder/Bird-MAE/blob/main/Bird-MAE-H)

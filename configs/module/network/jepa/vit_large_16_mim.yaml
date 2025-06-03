@@ -15,8 +15,8 @@ depth: 24
 drop_path: 0.1
 num_classes: ${data.dataset.num_classes} 
 pos_trainable: False
-#retrained_weights_path: /home/lrauch/AudioMAE_XCL_epoch=99_mixup_l.ckpt
-pretrained_weights_path: /home/lrauch/AudioMAE_XCL_epoch150_213828.ckpt
+#retrained_weights_path: /home/anonymous/AudioMAE_XCL_epoch=99_mixup_l.ckpt
+pretrained_weights_path: /home/anonymous/AudioMAE_XCL_epoch150_213828.ckpt
 target_length: ${data.dataset.target_length}
 freeze_backbone: false
 

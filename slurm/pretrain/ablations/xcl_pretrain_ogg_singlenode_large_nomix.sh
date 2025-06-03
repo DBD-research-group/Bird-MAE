@@ -17,13 +17,13 @@
 ####SBATCH --array=3-3%3
 
 date;hostname;pwd
-source /mnt/home/lrauch/.zshrc
+source /mnt/home/anonymous/.zshrc
 #source ~/envs/gadme_v1/bin/activate
 echo Activate conda
 conda activate gadme_v1
 echo $PYTHONPATH
 
-cd /mnt/home/lrauch/projects/birdMAE/
+cd /mnt/home/anonymous/projects/birdMAE/
 
 export CUDA_LAUNCH_BLOCKING=1
 export HYDRA_FULL_ERROR=1

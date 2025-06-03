@@ -60,7 +60,7 @@ gtzan = gtzan.cast_column("audio", Audio(sampling_rate=sampling_rate))
 from datasets import load_from_disk
 from datasets import Audio
 
-dataset = load_from_disk("/home/lrauch/projects/birdMAE/data/HSN/HSN_processed_42_cdb073221fc18e3d")
+dataset = load_from_disk("/home/anonymous/projects/birdMAE/data/HSN/HSN_processed_42_cdb073221fc18e3d")
 
 dataset
 #%%
@@ -155,7 +155,7 @@ import json
 from datasets import Sequence, ClassLabel
 dataset = load_dataset(
     "agkphysics/AudioSet", 
-    cache_dir="/home/lrauch/projects/birdMAE/data/audioset_balanced")
+    cache_dir="/home/anonymous/projects/birdMAE/data/audioset_balanced")
 
 dataset = dataset.cast_column("audio", Audio(sampling_rate=32_000))
 def _one_hot_encode(batch):
@@ -168,7 +168,7 @@ def _one_hot_encode(batch):
         class_one_hot_matrix[class_idx, indices] = 1.0
     
     return {"human_labels": class_one_hot_matrix}
-with open("/home/lrauch/projects/birdMAE/data/audioset_ontology_custom527.json", "r") as f:
+with open("/home/anonymous/projects/birdMAE/data/audioset_ontology_custom527.json", "r") as f:
     ontology = json.load(f)
 num_classes = len(ontology)
 label_names = list(ontology.keys())
@@ -228,7 +228,7 @@ from datasets import Audio, load_dataset
 
 dataset_ = load_dataset(
     "agkphysics/AudioSet", 
-    cache_dir="/home/lrauch/projects/birdMAE/data/audioset_balanced")
+    cache_dir="/home/anonymous/projects/birdMAE/data/audioset_balanced")
 
 dataset_ = dataset_.cast_column("audio", Audio(sampling_rate=32_000))
 from torchaudio.compliance.kaldi import fbank
@@ -413,7 +413,7 @@ print(f"Dataset size: {dataset_size_gb:.2f} GB")
 #%%
 from datasets import load_dataset
 
-dataset = load_dataset("DBD-research-group/BirdSet", "XCM", cache_dir="/home/lrauch/projects/birdMAE/data/XCM", num_proc=3)
+dataset = load_dataset("DBD-research-group/BirdSet", "XCM", cache_dir="/home/anonymous/projects/birdMAE/data/XCM", num_proc=3)
 
 
 #%%
