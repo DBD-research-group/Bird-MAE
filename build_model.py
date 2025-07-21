@@ -187,9 +187,9 @@ def build_model(cfg_module: DictConfig):
             mask_t_prob=cfg_module.network.mask_t_prob,
             mask_f_prob=cfg_module.network.mask_f_prob,
             mask2d=cfg_module.network.mask2d,
-            ema_update_rate=cfg_module.network.ema_update_rate,
             mask_mode=cfg_module.network.get("mask_mode", "rand"),
-            pos_trainable=cfg_module.network.get("pos_trainable", False)
+            pos_trainable=cfg_module.network.get("pos_trainable", False),
+            ppnet_cfg=cfg_module.network.ppnet_cfg
         )
 
     elif cfg_module.network.name == "BirdAVES-large":

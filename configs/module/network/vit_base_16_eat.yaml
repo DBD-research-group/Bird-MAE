@@ -15,14 +15,31 @@ depth: 12
 drop_path: 0.1
 num_classes: ${data.dataset.num_classes} 
 pos_trainable: False
-pretrained_weights_path: /home/lrauch/projects/birdMAE/logs/pretrain_xcm_eat/runs/XCM/EAT/2025-07-20_150856/callback_checkpoints/EAT_XCM_epoch=29.ckpt
+pretrained_weights_path: /home/lrauch/projects/birdMAE/logs/pretrain_xcm_eat/runs/XCM/EAT/2025-07-20_150856/callback_checkpoints/EAT_XCM_epoch=09.ckpt
 target_length: ${data.dataset.target_length}
 mask2d: ${data.transform.mask2d}
 mask_t_prob: ${data.transform.mask_t_prob}
 mask_f_prob: ${data.transform.mask_f_prob}
 freeze_backbone: false
-mask_mode: inv  # 'rand' or 'inv' - inverse block masking is typically better for EAT
-
+mask_mode: null  # 'rand' or 'inv' - inverse block masking is typically better for EAT
+ppnet_cfg:
+  num_prototypes: 20
+  channels_prototypes: 768
+  h_prototypes: 1
+  w_prototypes: 1
+  num_classes: ${data.dataset.num_classes}
+  topk_k: 1
+  margin: null
+  init_weights: true
+  add_on_layers_type: upsample
+  incorrect_class_connection: null
+  correct_class_connection: 1.0
+  bias_last_layer: -2.0
+  non_negative_last_layer: true
+  embedded_spectrogram_height: null
+  last_layer_lr: 4e-4
+  prototype_lr: 0.04
+  focal_similarity: true
 # ppnet: 
 #   num_prototypes: 420
 #   channels_prototypes: 768

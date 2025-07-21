@@ -41,16 +41,16 @@ class VIT_EAT(L.LightningModule):
                  mask_t_prob,
                  mask_f_prob,
                  mask2d,
-                 ema_update_rate,
                  mask_mode='rand',
-                 pos_trainable=False
+                 pos_trainable=False,
+                 ppnet_cfg=None
     ):
         super().__init__()
         self.save_hyperparameters()
         
         # Basic model parameters
         self.img_size = (img_size_x, img_size_y)
-        self.patch_size = patch_size
+        self.patch_size = (patch_size, patch_size)
         self.embed_dim = embed_dim
         self.depth = depth
         self.num_heads = num_heads
@@ -67,10 +67,9 @@ class VIT_EAT(L.LightningModule):
         self.mask_f_prob = mask_f_prob
         
         # Training parameters
-        self.ema_update_rate = ema_update_rate
         self.pretrained_weights_path = pretrained_weights_path
         self.target_length = target_length
-        
+        self.ppnet_cfg = ppnet_cfg
 
         # Build the model components
         self._build_model(eps, drop_path)
@@ -134,9 +133,32 @@ class VIT_EAT(L.LightningModule):
         ])
         
         self.norm = norm_layer(self.embed_dim)
-        
-        # Classification head
-        self.head = nn.Linear(self.embed_dim, self.num_classes)
+
+        if self.ppnet_cfg:
+            from ..ppnet.ppnet import PPNet
+
+            h_patches = self.img_size[1] // self.patch_size[0]  # freq patches (8 for 128/16)
+            w_patches = self.img_size[0] // self.patch_size[1]  # time patches (32 for 512/16)
+
+            self.ppnet = PPNet(
+                num_prototypes=self.ppnet_cfg.num_prototypes,
+                channels_prototypes=self.ppnet_cfg.channels_prototypes,
+                h_prototypes=self.ppnet_cfg.h_prototypes,
+                w_prototypes=self.ppnet_cfg.w_prototypes,
+                num_classes=self.ppnet_cfg.num_classes,
+                topk_k=self.ppnet_cfg.topk_k,
+                margin=self.ppnet_cfg.margin,
+                init_weights=self.ppnet_cfg.init_weights,
+                add_on_layers_type=self.ppnet_cfg.add_on_layers_type,
+                incorrect_class_connection=self.ppnet_cfg.incorrect_class_connection,
+                correct_class_connection=self.ppnet_cfg.correct_class_connection,
+                bias_last_layer=self.ppnet_cfg.bias_last_layer,
+                non_negative_last_layer=self.ppnet_cfg.non_negative_last_layer,
+                embedded_spectrogram_height=self.ppnet_cfg.embedded_spectrogram_height,
+            )
+        else:
+            # Classification head
+            self.head = nn.Linear(self.embed_dim, self.num_classes)
         
         # Attentive pooling if needed
         if self.global_pool == "attentive":
@@ -145,8 +167,11 @@ class VIT_EAT(L.LightningModule):
         # Masking functions
         if self.mask_mode == 'rand':
             self.mask_fn = self.random_masking
-        else:
+        
+        elif self.mask_mode == 'inv':
             self.mask_fn = self.inverse_block_mask
+        else:
+            self.mask_fn = None
 
     def random_masking(self, shape, mask_ratio, *args):
         """Random masking as in original EAT"""
@@ -260,7 +285,7 @@ class VIT_EAT(L.LightningModule):
         x = x + self.pos_embed[:, 1:, :]
         
         # Apply masking if specified
-        if mask_ratio > 0:
+        if mask_ratio > 0 and self.mask_fn is not None:
             num_freq_patches, num_time_patches = self.patch_embed.patch_ft
             mask, ids_keep, ids_restore = self.mask_fn(
                 x.shape, mask_ratio, num_freq_patches, num_time_patches)
@@ -280,54 +305,89 @@ class VIT_EAT(L.LightningModule):
         for blk in self.blocks:
             x, _ = blk(x)
         
-        # Global pooling
-        if self.global_pool == "average": 
-            x = x[:, 1:, :].mean(dim=1)
-            outcome = self.fc_norm(x)
-        elif self.global_pool == "attentive":
-            outcome = self.attentive_probe(x)
-            outcome = self.fc_norm(outcome)
-        elif self.global_pool == "cls":
-            x = self.norm(x)
-            outcome = x[:, 0]
+        if self.ppnet_cfg:
+            # PPNet head processing
+            x_cls = x[:, 0, :]  # cls token
+            x_patch = x[:, 1:, :]  # patch tokens
+            
+            if self.ppnet_cfg.focal_similarity:
+                # Focal similarity: subtract cls from patches
+                z_f = x_patch - x_cls.unsqueeze(1)
+                # Reshape to spatial format for PPNet
+                h_patches = self.img_size[1] // self.patch_size[0]  # freq patches
+                w_patches = self.img_size[0] // self.patch_size[1]  # time patches
+                x = z_f.permute(0, 2, 1).reshape(B, self.embed_dim, h_patches, w_patches)
+            else:
+                # Regular patch processing
+                h_patches = self.img_size[1] // self.patch_size[0]
+                w_patches = self.img_size[0] // self.patch_size[1]
+                x = x_patch.permute(0, 2, 1).reshape(B, self.embed_dim, h_patches, w_patches)
+            
+            logits, _ = self.ppnet(x)
+            return logits
         else:
-            x = self.norm(x)
-            outcome = x[:, 0]
+            # Global pooling
+            if self.global_pool == "average": 
+                x = x[:, 1:, :].mean(dim=1)
+                outcome = self.fc_norm(x)
+            elif self.global_pool == "attentive":
+                outcome = self.attentive_probe(x)
+                outcome = self.fc_norm(outcome)
+            elif self.global_pool == "cls":
+                x = self.norm(x)
+                outcome = x[:, 0]
+            else:
+                x = self.norm(x)
+                outcome = x[:, 0]
             
         return outcome
 
     def forward(self, x, mask_ratio=0.0):
         """Forward pass"""
         x = self.forward_features(x, mask_ratio)
-        pred = self.head(x)
+        if self.ppnet_cfg:
+            pred = x
+        else:
+            pred = self.head(x)
         return pred
 
     def training_step(self, batch, batch_idx):
         """Training step"""
         audio = batch["audio"]
         targets = batch["label"]
-        pred = self(audio)
-        targets = targets.long()
         
-        try:
-            loss = self.loss(pred, targets)
-        except:
-            loss = self.loss(pred, targets.float())
+        if self.ppnet_cfg:
+            logits = self(audio)
+            targets = targets.long()
+            
+            # PPNet-specific loss calculation
+            try:
+                bce_loss = self.loss(logits, targets.float())
+            except:
+                bce_loss = self.loss(logits, targets)
+            
+            orthogonality_loss = self._calculate_orthogonality_loss()
+            loss = bce_loss + orthogonality_loss
+            
+            self.log('bce_loss', bce_loss, on_step=True, on_epoch=True, prog_bar=True)
+            self.log('orthogonality_loss', orthogonality_loss, on_step=True, on_epoch=True, prog_bar=True)
+        else:
+            # Regular classification
+            pred = self(audio)
+            targets = targets.long()
+            
+            try:
+                loss = self.loss(pred, targets)
+            except:
+                loss = self.loss(pred, targets.float())
             
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True)
-
-        if self.ema: 
-            self.ema.update()
-
         return loss
 
     def validation_step(self, batch, batch_idx):
         """Validation step"""
         audio = batch["audio"]
         targets = batch["label"]
-
-        if self.ema: 
-            self.ema.apply_shadow()
 
         pred = self(audio)
         targets = targets.long()
@@ -340,9 +400,6 @@ class VIT_EAT(L.LightningModule):
         self.val_predictions.append(pred.detach().cpu())
         self.val_targets.append(targets.detach().cpu())
         self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-
-        if self.ema:
-            self.ema.restore()
     
     def on_validation_epoch_end(self):
         """End of validation epoch"""
@@ -376,8 +433,6 @@ class VIT_EAT(L.LightningModule):
         self.test_targets.append(targets.detach().cpu())
         self.log('test_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
 
-        if self.ema: 
-            self.ema.restore()
     
     def on_test_epoch_end(self):
         """End of test epoch"""
@@ -395,19 +450,45 @@ class VIT_EAT(L.LightningModule):
 
     def configure_optimizers(self):
         """Configure optimizers and schedulers"""
-        if self.layer_decay:
-            params = param_groups_lrd(
-                model=self,
-                weight_decay=self.optimizer_cfg["weight_decay"],
-                no_weight_decay_list=self.no_weight_decay(),
-                layer_decay=self.layer_decay,
-                decay_type=self.decay_type
-            )
-            self.optimizer = hydra.utils.instantiate(self.optimizer_cfg, params)
+        
+        if self.ppnet_cfg:
+            # PPNet-specific optimizer with different LRs for different components
+            from util.lr_decay import param_groups_lrd_pp
+            
+            
+            if self.layer_decay:
+                params = param_groups_lrd_pp(
+                    model=self,
+                    weight_decay=self.optimizer_cfg["weight_decay"],
+                    no_weight_decay_list=self.no_weight_decay(),
+                    layer_decay=self.layer_decay,
+                    decay_type=self.decay_type,
+                    last_layer_lr=self.ppnet_cfg.last_layer_lr,
+                    prototype_lr=self.ppnet_cfg.prototype_lr,
+                )
+                
+                self.optimizer = hydra.utils.instantiate(self.optimizer_cfg, params)
+            else:
+                # Fallback for PPNet without layer decay
+                params = self.parameters()
+                self.optimizer = hydra.utils.instantiate(self.optimizer_cfg, params=params)
+                
         else:
-            self.optimizer = hydra.utils.instantiate(
-                self.optimizer_cfg, params=self.parameters())
-    
+            # Regular optimizer for standard classification head
+            if self.layer_decay:
+                params = param_groups_lrd(
+                    model=self,
+                    weight_decay=self.optimizer_cfg["weight_decay"],
+                    no_weight_decay_list=self.no_weight_decay(),
+                    layer_decay=self.layer_decay,
+                    decay_type=self.decay_type
+                )
+                self.optimizer = hydra.utils.instantiate(self.optimizer_cfg, params)
+            else:
+                self.optimizer = hydra.utils.instantiate(
+                    self.optimizer_cfg, params=self.parameters())
+
+        # Scheduler configuration (same for both PPNet and regular)
         if self.scheduler_cfg: 
             num_training_steps = self.trainer.estimated_stepping_batches
             warmup_ratio = 0.067
@@ -442,7 +523,7 @@ class VIT_EAT(L.LightningModule):
             
             # Handle different checkpoint formats
             if "encoder" in checkpoint:
-                # EAT checkpoint format
+                # Direct EAT encoder checkpoint
                 encoder_state = checkpoint["encoder"]
                 pretrained_state_dict = {}
                 
@@ -458,7 +539,24 @@ class VIT_EAT(L.LightningModule):
                         pretrained_state_dict[key] = value
                     elif key.startswith("norm."):
                         pretrained_state_dict[key] = value
+                        
+            elif "state_dict" in checkpoint:
+                # Lightning checkpoint format
+                state_dict = checkpoint["state_dict"]
+                pretrained_state_dict = {}
                 
+                for key, value in state_dict.items():
+                    if key.startswith("student.encoder."):
+                        new_key = key.replace("student.encoder.", "")
+                        
+                        # Map EAT naming to VIT_EAT naming
+                        new_key = self._map_eat_to_vit_key(new_key)
+                        pretrained_state_dict[new_key] = value
+                    elif key.startswith("encoder."):
+                        new_key = key.replace("encoder.", "")
+                        new_key = self._map_eat_to_vit_key(new_key)
+                        pretrained_state_dict[new_key] = value
+                        
             elif "model" in checkpoint:
                 # Standard model checkpoint
                 state_dict = checkpoint["model"]
@@ -467,9 +565,11 @@ class VIT_EAT(L.LightningModule):
                 for key, value in state_dict.items():
                     if key.startswith("student.encoder."):
                         new_key = key.replace("student.encoder.", "")
+                        new_key = self._map_eat_to_vit_key(new_key)
                         pretrained_state_dict[new_key] = value
                     elif key.startswith("encoder."):
                         new_key = key.replace("encoder.", "")
+                        new_key = self._map_eat_to_vit_key(new_key)
                         pretrained_state_dict[new_key] = value
                     else:
                         pretrained_state_dict[key] = value
@@ -493,15 +593,48 @@ class VIT_EAT(L.LightningModule):
             # Reinitialize positional embeddings if needed
             if self.target_length != 512:
                 print(f"Reinitializing positional embeddings for target length {self.target_length}")
-                patch_hw = (self.img_size[1] // self.patch_size[1], self.img_size[0] // self.patch_size[0])
+                patch_hw = (self.img_size[1] // self.patch_size, self.img_size[0] // self.patch_size)
                 pos_embed = get_2d_sincos_pos_embed_flexible(
                     self.pos_embed.size(-1), patch_hw, cls_token=True)
                 self.pos_embed.data = torch.from_numpy(pos_embed).float().unsqueeze(0)
+                
+            print("Successfully loaded EAT student encoder weights!")
                 
         except Exception as e:
             print(f"Error loading pretrained weights: {e}")
             print("Continuing with random initialization...")
 
+    def _map_eat_to_vit_key(self, key):
+        """Map EAT encoder key names to VIT_EAT key names"""
+        # Handle layer norm naming: ln1/ln2 -> norm1/norm2
+        if ".ln1." in key:
+            key = key.replace(".ln1.", ".norm1.")
+        elif ".ln2." in key:
+            key = key.replace(".ln2.", ".norm2.")
+        
+        # Handle MLP naming: ff.ffn.0 -> mlp.fc1, ff.ffn.3 -> mlp.fc2
+        if ".ff.ffn.0." in key:
+            key = key.replace(".ff.ffn.0.", ".mlp.fc1.")
+        elif ".ff.ffn.3." in key:
+            key = key.replace(".ff.ffn.3.", ".mlp.fc2.")
+        
+        return key
+
+    
+    def _calculate_orthogonality_loss(self) -> torch.Tensor:
+        """
+        Calculate the normalized orthogonality loss.
+
+        Returns:
+            torch.Tensor: The normalized orthogonality loss.
+        """
+        orthogonalities = self.ppnet.get_prototype_orthogonalities()
+        orthogonality_loss = torch.norm(orthogonalities)
+
+        # Normalize the orthogonality loss by the number of elements
+        normalized_orthogonality_loss = orthogonality_loss / orthogonalities.numel()
+
+        return normalized_orthogonality_loss
 
 # Vit Encoder for original EAT with AudioSet pretraining
 ## https://github.com/huggingface/pytorch-image-models/blob/main/timm/layers/drop.py#L170

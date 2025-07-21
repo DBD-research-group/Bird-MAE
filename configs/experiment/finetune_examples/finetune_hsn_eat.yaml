@@ -4,7 +4,7 @@ defaults:
   - override /data/dataset: HSN
   - override /data/loaders: esc50
   - override /data/transform: melbank_birdset
-  - override /logger: mlflow
+  - override /logger: mlflow_sql
   - override /module/network: vit_base_16_eat.yaml
   - override /module/optimizer: adamw
   - override /module/scheduler: cosine
@@ -58,6 +58,10 @@ module:
       decay_type: right
       
   network:
-    freeze_backbone: true
+    freeze_backbone: false
     global_pool: cls
+    ppnet_cfg: 
+      last_layer_lr: ${module.optimizer.target.lr}
+      prototype_lr: 0.04
+      focal_similarity: true
       
