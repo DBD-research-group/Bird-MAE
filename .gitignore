@@ -17,3 +17,4 @@ util/__pycache__/pos_embed.cpython-310.pyc
 /upload_hf/
 run_overnight.sh
 start_mlflow.sh
+*.db
