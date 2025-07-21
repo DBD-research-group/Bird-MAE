@@ -10,7 +10,7 @@ defaults:
   #- override /module/network: convnext.yaml
   - override /module/optimizer: adamw
   - override /module/scheduler: cosine
-  - override /module/loss: asymmetric_loss.yaml
+  - override /module/loss: asymmetric_poly_loss.yaml
   #- override /module/loss: binary_cross_entropy.yaml
   - override /module/metric: birdset_collection
   - override /paths: workstation
@@ -72,6 +72,6 @@ module:
     sampling_rate: 16_000
     ppnet:
       num_prototypes: 20
-      last_layer_lr: 1e-3
+      last_layer_lr: 0.003
       prototype_lr: 0.04
       

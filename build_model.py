@@ -1,6 +1,6 @@
 import hydra
 from omegaconf import DictConfig
-from models import AudioMAE, VIT, ConvNext, VIT_ppnet, VIT_MIM, BirdAVES, BirdAVES_ppnet, SimCLR, SimCLR_ppnet
+from models import AudioMAE, EAT, VIT_EAT, VIT, ConvNext, VIT_ppnet, VIT_MIM, BirdAVES, BirdAVES_ppnet, SimCLR, SimCLR_ppnet
 from models.jepa.models_jepa import A_JEPA, VIT_JEPA
 from util import pylogger
 
@@ -149,6 +149,47 @@ def build_model(cfg_module: DictConfig):
             drop_path_rate=cfg_module.network.drop_path_rate,
             init_std=cfg_module.network.init_std,
             target_length=cfg_module.network.target_length,
+        )
+    
+    elif cfg_module.network.name == "EAT":
+        module = EAT(
+            norm_layer=cfg_module.network.norm_layer,
+            mask_ratio=cfg_module.network.mask_ratio,
+            cfg_encoder=cfg_module.network.encoder,
+            cfg_decoder=cfg_module.network.decoder,
+            cfg_teacher=cfg_module.network.teacher,
+            optimizer=cfg_module.network.optimizer,
+            scheduler=cfg_module.scheduler,
+        )
+    
+    elif cfg_module.network.name == "VIT_EAT":
+        module = VIT_EAT(
+            img_size_x=cfg_module.network.img_size_x,
+            img_size_y=cfg_module.network.img_size_y,
+            patch_size=cfg_module.network.patch_size,
+            in_chans=cfg_module.network.in_chans,
+            embed_dim=cfg_module.network.embed_dim,
+            global_pool=cfg_module.network.global_pool,
+            norm_layer=cfg_module.network.norm_layer,
+            mlp_ratio=cfg_module.network.mlp_ratio,
+            qkv_bias=cfg_module.network.qkv_bias,
+            eps=cfg_module.network.eps,
+            drop_path=cfg_module.network.drop_path,
+            num_heads=cfg_module.network.num_heads,
+            depth=cfg_module.network.depth,
+            num_classes=cfg_module.network.num_classes,
+            optimizer=cfg_module.optimizer,
+            scheduler=cfg_module.scheduler,
+            pretrained_weights_path=cfg_module.network.pretrained_weights_path,
+            target_length=cfg_module.network.target_length,
+            loss=cfg_module.loss,
+            metric_cfg=cfg_module.metric,
+            mask_t_prob=cfg_module.network.mask_t_prob,
+            mask_f_prob=cfg_module.network.mask_f_prob,
+            mask2d=cfg_module.network.mask2d,
+            ema_update_rate=cfg_module.network.ema_update_rate,
+            mask_mode=cfg_module.network.get("mask_mode", "rand"),
+            pos_trainable=cfg_module.network.get("pos_trainable", False)
         )
 
     elif cfg_module.network.name == "BirdAVES-large":

@@ -1,0 +1,50 @@
+name: EAT
+sampling_rate: 32_000
+norm_layer: nn.LayerNorm
+
+mask_ratio: 0.8
+
+encoder:
+  # Input/patch configuration
+  input_shape_t: 512     
+  input_shape_f: 128      
+  patch_size: 16          
+  embed_dim: 768
+  depth: 12
+  num_heads: 12
+  mlp_ratio: 4
+  qkv_bias: true
+  dropout: 0.0
+  drop_path_rate: 0.0
+  pos_trainable: false
+  clone_size: 16
+  mask_mode: 'inv'        # ''rand' for random masking
+
+decoder:
+  kernel_size: 3
+  stride: 1
+  padding: 'same'
+  groups: 16
+  activation: nn.GELU
+  add_residual: true
+  num_layers: 6
+
+teacher:
+  average_top_k_layers: 12
+  instance_norm_target_layer: true
+  batch_norm_target_layer: false
+  layer_norm_target_layer: false
+  layer_norm_targets: true
+  instance_norm_targets: false
+  use_ema_scheduler: true
+
+optimizer:
+    lr: 0.0005
+    weight_decay: 0.05
+    betas: [0.9, 0.95]
+    train_batch_size: 12  # Your actual batch size
+    layer_decay: 1.0
+    clip_norm: 4.0
+
+scheduler:
+  use_custom_scheduler: true  # Set to false to use cosine scheduler

@@ -4,4 +4,4 @@ defaults:
   #- model_checkpoint
   - progress_bar
   #- test_after_epoch
- # - model_checkpoint/
+  - model_checkpoint

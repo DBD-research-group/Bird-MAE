@@ -5,26 +5,23 @@ defaults:
   - override /data/loaders: esc50
   - override /data/transform: melbank_birdset
   - override /logger: mlflow
-  #- override /module/network: vit_large_16.yaml
-  - override /module/network: vit_base_16.yaml
-  #- override /module/network: convnext.yaml
+  - override /module/network: vit_base_16_eat.yaml
   - override /module/optimizer: adamw
   - override /module/scheduler: cosine
-  - override /module/loss: asymmetric_poly_loss.yaml
-  #- override /module/loss: binary_cross_entropy.yaml
+  - override /module/loss: asymmetric_loss
   - override /module/metric: birdset_collection
   - override /paths: workstation
   - override /trainer: single_gpu
 
 seed: 42
 start_time: ${now:%Y-%m-%d_%H%M%S}
-task_name: "finetune_hsn"
+task_name: "eat_hsn"
 
 train: true
 test: true
 
 logger:
-  experiment_name: ablate_hsn
+  experiment_name: ${task_name}
 
 data:
   loaders:
@@ -49,7 +46,7 @@ trainer:
 module:
   optimizer:
     target:
-      #lr: 5e-5
+      #lr: 5e-4
       lr: 4e-4
       #lr: 5e-4
       #lr: 1e-4
@@ -57,16 +54,10 @@ module:
       weight_decay: 3e-4
       
     extras:
-      #layer_decay: 0.75
       layer_decay: 0.75
-      #decay_type: inverse_normal
       decay_type: right
       
   network:
-    ema_update_rate: null
-    name: VIT_ppnet
-    freeze_backbone: True
-    ppnet:
-      num_prototypes: 20
-      last_layer_lr: 1e-4
+    freeze_backbone: true
+    global_pool: cls
       

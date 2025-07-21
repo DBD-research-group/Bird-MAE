@@ -15,11 +15,8 @@ encoder:
     mlp_ratio: 4
 decoder:
     mode: std
-<<<<<<< HEAD
     #mode: swin 
     #mode null
-=======
->>>>>>> c9babe9efe95ad52ffa491c8e3a9fba9b0879e6e
     embed_dim: 512
     depth: 8
     num_heads: 16

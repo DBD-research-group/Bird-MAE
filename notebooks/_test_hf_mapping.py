@@ -157,6 +157,9 @@ dataset = load_dataset(
     "agkphysics/AudioSet", 
     cache_dir="/home/lrauch/projects/birdMAE/data/audioset_balanced")
 
+#%%
+dataset
+#%%
 dataset = dataset.cast_column("audio", Audio(sampling_rate=32_000))
 def _one_hot_encode(batch):
     label_list = [y for y in batch["human_labels"]]
