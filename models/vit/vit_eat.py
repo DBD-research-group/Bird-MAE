@@ -1,12 +1,6 @@
-from pathlib import Path
-from datetime import datetime
 from functools import partial
-import numpy as np
-import pandas as pd
-from tqdm import tqdm
 import torch
 from torch import nn
-import torch.nn.functional as F
 from util.pos_embed import get_2d_sincos_pos_embed_flexible
 import hydra
 import lightning as L
@@ -48,7 +42,6 @@ class VIT_EAT(L.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         
-        # Basic model parameters
         self.img_size = (img_size_x, img_size_y)
         self.patch_size = (patch_size, patch_size)
         self.embed_dim = embed_dim
@@ -61,20 +54,17 @@ class VIT_EAT(L.LightningModule):
         self.mask_mode = mask_mode
         self.pos_trainable = pos_trainable
         
-        # Masking parameters
         self.mask_2d = mask2d
         self.mask_t_prob = mask_t_prob
         self.mask_f_prob = mask_f_prob
         
-        # Training parameters
         self.pretrained_weights_path = pretrained_weights_path
         self.target_length = target_length
         self.ppnet_cfg = ppnet_cfg
 
-        # Build the model components
+        # build model components
         self._build_model(eps, drop_path)
         
-        # Loss and metrics
         self.loss = hydra.utils.instantiate(loss)
         self.optimizer = None
         self.optimizer_cfg = optimizer.target
@@ -83,7 +73,7 @@ class VIT_EAT(L.LightningModule):
         self.decay_type = optimizer.extras.decay_type
         self.scheduler_cfg = scheduler
         
-        # Setup metrics
+        # setup metrics
         metric = hydra.utils.instantiate(metric_cfg)
         additional_metrics = []
         if metric_cfg.get("additional"):
@@ -97,7 +87,6 @@ class VIT_EAT(L.LightningModule):
         self.test_add_metrics = add_metrics.clone()
         self.val_add_metrics = add_metrics.clone()
         
-        # Storage for predictions/targets
         self.val_predictions = []
         self.val_targets = []
         self.test_predictions = []
@@ -106,20 +95,20 @@ class VIT_EAT(L.LightningModule):
   
     def _build_model(self, eps, drop_path_rate):
         """Build the model components"""
-        # Patch embedding
+        # patch embedding
         self.patch_embed = PatchEmbed(self.img_size, self.patch_size, 1, self.embed_dim)
         
-        # Positional embedding
+        # positional embedding
         pos_embed = get_2d_sincos_pos_embed_flexible(
             self.embed_dim, self.patch_embed.patch_ft, cls_token=True)
         self.pos_embed = nn.Parameter(
             torch.from_numpy(pos_embed).float().unsqueeze(0), 
             requires_grad=self.pos_trainable)
         
-        # Class token
+        # cls token
         self.cls_token = nn.Parameter(torch.randn(1, 1, self.embed_dim) * 0.02)
         
-        # Norm layer
+        # norm layer
         norm_layer = partial(nn.LayerNorm, eps=eps)
         self.fc_norm = norm_layer(self.embed_dim)
         
@@ -135,6 +124,7 @@ class VIT_EAT(L.LightningModule):
         self.norm = norm_layer(self.embed_dim)
 
         if self.ppnet_cfg:
+            # ppnet head
             from ..ppnet.ppnet import PPNet
 
             h_patches = self.img_size[1] // self.patch_size[0]  # freq patches (8 for 128/16)
@@ -157,14 +147,14 @@ class VIT_EAT(L.LightningModule):
                 embedded_spectrogram_height=self.ppnet_cfg.embedded_spectrogram_height,
             )
         else:
-            # Classification head
+            # normal classification head
             self.head = nn.Linear(self.embed_dim, self.num_classes)
         
-        # Attentive pooling if needed
+        # attentive pooling
         if self.global_pool == "attentive":
             self.attentive_probe = AttentivePooling(dim=self.embed_dim, num_heads=self.num_heads)
         
-        # Masking functions
+        # masking augs
         if self.mask_mode == 'rand':
             self.mask_fn = self.random_masking
         
@@ -240,7 +230,6 @@ class VIT_EAT(L.LightningModule):
                     to_mask = torch.multinomial((1 - m), int(target_len - n), replacement=False)
                     m[to_mask] = 1
                     
-        # Inverse mask: 1 are places to remove, 0 are places to keep
         mask = 1 - mask  
         mask = mask.to(torch.uint8)
         ids_shuffle = mask.argsort(dim=1)
@@ -256,7 +245,6 @@ class VIT_EAT(L.LightningModule):
         T = self.img_size[0] // self.patch_size[0]  # time patches
         F = self.img_size[1] // self.patch_size[1]  # freq patches
 
-        # Mask T
         x = x.reshape(N, T, F, D)
         len_keep_T = int(T * (1 - self.mask_t_prob))
         noise = torch.rand(N, T, device=x.device)
@@ -265,7 +253,6 @@ class VIT_EAT(L.LightningModule):
         index = ids_keep.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, F, D)
         x = torch.gather(x, dim=1, index=index)
 
-        # Mask F
         x = x.permute(0,2,1,3)  # N T' F D => N F T' D
         len_keep_F = int(F * (1 - self.mask_f_prob))
         noise = torch.rand(N, F, device=x.device)
@@ -284,7 +271,7 @@ class VIT_EAT(L.LightningModule):
         x = self.patch_embed(x)
         x = x + self.pos_embed[:, 1:, :]
         
-        # Apply masking if specified
+        # apply masking 
         if mask_ratio > 0 and self.mask_fn is not None:
             num_freq_patches, num_time_patches = self.patch_embed.patch_ft
             mask, ids_keep, ids_restore = self.mask_fn(
@@ -292,16 +279,16 @@ class VIT_EAT(L.LightningModule):
             if mask is not None:
                 x = torch.gather(x, dim=1, index=ids_keep)
         
-        # Apply 2D masking if specified
+        # apply 2D masking 
         if self.mask_2d and (self.mask_t_prob > 0.0 or self.mask_f_prob > 0.0):
             x, _, _ = self.random_masking_2d(x)
         
-        # Add class token
+        # add class token
         cls_token = self.cls_token + self.pos_embed[:, :1, :]
         cls_tokens = cls_token.expand(B, -1, -1)
         x = torch.cat((cls_tokens, x), dim=1)
         
-        # Apply transformer blocks
+        # transformer blocks
         for blk in self.blocks:
             x, _ = blk(x)
         
@@ -311,14 +298,14 @@ class VIT_EAT(L.LightningModule):
             x_patch = x[:, 1:, :]  # patch tokens
             
             if self.ppnet_cfg.focal_similarity:
-                # Focal similarity: subtract cls from patches
+                # focal similarity: subtract cls from patches
                 z_f = x_patch - x_cls.unsqueeze(1)
-                # Reshape to spatial format for PPNet
+                # reshape to spatial format for PPNet
                 h_patches = self.img_size[1] // self.patch_size[0]  # freq patches
                 w_patches = self.img_size[0] // self.patch_size[1]  # time patches
                 x = z_f.permute(0, 2, 1).reshape(B, self.embed_dim, h_patches, w_patches)
             else:
-                # Regular patch processing
+                # regular patch processing
                 h_patches = self.img_size[1] // self.patch_size[0]
                 w_patches = self.img_size[0] // self.patch_size[1]
                 x = x_patch.permute(0, 2, 1).reshape(B, self.embed_dim, h_patches, w_patches)
@@ -326,7 +313,6 @@ class VIT_EAT(L.LightningModule):
             logits, _ = self.ppnet(x)
             return logits
         else:
-            # Global pooling
             if self.global_pool == "average": 
                 x = x[:, 1:, :].mean(dim=1)
                 outcome = self.fc_norm(x)
@@ -343,7 +329,6 @@ class VIT_EAT(L.LightningModule):
         return outcome
 
     def forward(self, x, mask_ratio=0.0):
-        """Forward pass"""
         x = self.forward_features(x, mask_ratio)
         if self.ppnet_cfg:
             pred = x
@@ -360,7 +345,7 @@ class VIT_EAT(L.LightningModule):
             logits = self(audio)
             targets = targets.long()
             
-            # PPNet-specific loss calculation
+            # PPNet loss
             try:
                 bce_loss = self.loss(logits, targets.float())
             except:
@@ -372,7 +357,7 @@ class VIT_EAT(L.LightningModule):
             self.log('bce_loss', bce_loss, on_step=True, on_epoch=True, prog_bar=True)
             self.log('orthogonality_loss', orthogonality_loss, on_step=True, on_epoch=True, prog_bar=True)
         else:
-            # Regular classification
+            # normal classification
             pred = self(audio)
             targets = targets.long()
             
@@ -385,7 +370,6 @@ class VIT_EAT(L.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        """Validation step"""
         audio = batch["audio"]
         targets = batch["label"]
 
@@ -402,7 +386,6 @@ class VIT_EAT(L.LightningModule):
         self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
     
     def on_validation_epoch_end(self):
-        """End of validation epoch"""
         preds = torch.cat(self.val_predictions)
         targets = torch.cat(self.val_targets)
         metric = self.val_metric(preds, targets)
@@ -416,11 +399,10 @@ class VIT_EAT(L.LightningModule):
         self.val_targets = []
     
     def test_step(self, batch, batch_idx):
-        """Test step"""
         audio = batch["audio"]
         targets = batch["label"]
 
-        # Disable masking for test
+        # disable masking for test
         pred = self(audio, mask_ratio=0.0)
 
         targets = targets.long()
@@ -435,7 +417,6 @@ class VIT_EAT(L.LightningModule):
 
     
     def on_test_epoch_end(self):
-        """End of test epoch"""
         preds = torch.cat(self.test_predictions)
         targets = torch.cat(self.test_targets)
         self.test_metric(preds, targets)
@@ -448,11 +429,9 @@ class VIT_EAT(L.LightningModule):
         self.test_predictions = []
         self.test_targets = []
 
-    def configure_optimizers(self):
-        """Configure optimizers and schedulers"""
-        
+    def configure_optimizers(self):       
         if self.ppnet_cfg:
-            # PPNet-specific optimizer with different LRs for different components
+            # PPNet-specific optimizer
             from util.lr_decay import param_groups_lrd_pp
             
             
@@ -469,12 +448,12 @@ class VIT_EAT(L.LightningModule):
                 
                 self.optimizer = hydra.utils.instantiate(self.optimizer_cfg, params)
             else:
-                # Fallback for PPNet without layer decay
+                # fallback for PPNet without layer decay
                 params = self.parameters()
                 self.optimizer = hydra.utils.instantiate(self.optimizer_cfg, params=params)
                 
         else:
-            # Regular optimizer for standard classification head
+            # normal optimizer for standard classification head
             if self.layer_decay:
                 params = param_groups_lrd(
                     model=self,
@@ -488,7 +467,7 @@ class VIT_EAT(L.LightningModule):
                 self.optimizer = hydra.utils.instantiate(
                     self.optimizer_cfg, params=self.parameters())
 
-        # Scheduler configuration (same for both PPNet and regular)
+        # scheduler configuration (same for both PPNet and normal)
         if self.scheduler_cfg: 
             num_training_steps = self.trainer.estimated_stepping_batches
             warmup_ratio = 0.067
@@ -515,19 +494,18 @@ class VIT_EAT(L.LightningModule):
         return {'pos_embed', 'cls_token'}
 
     def load_pretrained_weights(self, pretrained_weights_path, dataset_name):
-        """Load pretrained weights from EAT checkpoint"""
         print(f"Loading EAT pretrained weights from {pretrained_weights_path}")
         
         try:
             checkpoint = torch.load(pretrained_weights_path, map_location="cpu")
             
-            # Handle different checkpoint formats
+            # handle different checkpoint formats
             if "encoder" in checkpoint:
-                # Direct EAT encoder checkpoint
+                # direct EAT encoder checkpoint
                 encoder_state = checkpoint["encoder"]
                 pretrained_state_dict = {}
                 
-                # Map encoder weights to ViT structure
+                # map encoder weights to ViT structure
                 for key, value in encoder_state.items():
                     if key.startswith("patch_embed."):
                         pretrained_state_dict[key] = value
@@ -541,7 +519,7 @@ class VIT_EAT(L.LightningModule):
                         pretrained_state_dict[key] = value
                         
             elif "state_dict" in checkpoint:
-                # Lightning checkpoint format
+                # lightning checkpoint format
                 state_dict = checkpoint["state_dict"]
                 pretrained_state_dict = {}
                 
@@ -549,7 +527,7 @@ class VIT_EAT(L.LightningModule):
                     if key.startswith("student.encoder."):
                         new_key = key.replace("student.encoder.", "")
                         
-                        # Map EAT naming to VIT_EAT naming
+                        # map EAT naming to VIT_EAT naming
                         new_key = self._map_eat_to_vit_key(new_key)
                         pretrained_state_dict[new_key] = value
                     elif key.startswith("encoder."):
@@ -558,7 +536,7 @@ class VIT_EAT(L.LightningModule):
                         pretrained_state_dict[new_key] = value
                         
             elif "model" in checkpoint:
-                # Standard model checkpoint
+                # standard model checkpoint
                 state_dict = checkpoint["model"]
                 pretrained_state_dict = {}
                 
@@ -576,7 +554,7 @@ class VIT_EAT(L.LightningModule):
             else:
                 pretrained_state_dict = checkpoint
             
-            # Remove head weights if num_classes doesn't match
+            # remove head weights if num_classes doesn't match
             current_state = self.state_dict()
             for k in ['head.weight', 'head.bias', 'fc.weight', 'fc.bias']:
                 if k in pretrained_state_dict and k in current_state:
@@ -584,35 +562,33 @@ class VIT_EAT(L.LightningModule):
                         print(f"Removing key {k} from pretrained checkpoint due to shape mismatch")
                         del pretrained_state_dict[k]
             
-            # Load the state dict
+            # Lload the state dict
             missing_keys, unexpected_keys = self.load_state_dict(pretrained_state_dict, strict=False)
             
             print(f"Missing keys: {missing_keys}")
             print(f"Unexpected keys: {unexpected_keys}")
             
-            # Reinitialize positional embeddings if needed
+            # reinitialize positional embeddings if needed (e.g. AudioSet)
             if self.target_length != 512:
                 print(f"Reinitializing positional embeddings for target length {self.target_length}")
                 patch_hw = (self.img_size[1] // self.patch_size, self.img_size[0] // self.patch_size)
                 pos_embed = get_2d_sincos_pos_embed_flexible(
                     self.pos_embed.size(-1), patch_hw, cls_token=True)
                 self.pos_embed.data = torch.from_numpy(pos_embed).float().unsqueeze(0)
-                
-            print("Successfully loaded EAT student encoder weights!")
-                
+                                
         except Exception as e:
             print(f"Error loading pretrained weights: {e}")
             print("Continuing with random initialization...")
 
     def _map_eat_to_vit_key(self, key):
         """Map EAT encoder key names to VIT_EAT key names"""
-        # Handle layer norm naming: ln1/ln2 -> norm1/norm2
+        # handle layer norm naming: ln1/ln2 -> norm1/norm2
         if ".ln1." in key:
             key = key.replace(".ln1.", ".norm1.")
         elif ".ln2." in key:
             key = key.replace(".ln2.", ".norm2.")
         
-        # Handle MLP naming: ff.ffn.0 -> mlp.fc1, ff.ffn.3 -> mlp.fc2
+        # handle MLP naming: ff.ffn.0 -> mlp.fc1, ff.ffn.3 -> mlp.fc2
         if ".ff.ffn.0." in key:
             key = key.replace(".ff.ffn.0.", ".mlp.fc1.")
         elif ".ff.ffn.3." in key:
@@ -622,16 +598,10 @@ class VIT_EAT(L.LightningModule):
 
     
     def _calculate_orthogonality_loss(self) -> torch.Tensor:
-        """
-        Calculate the normalized orthogonality loss.
-
-        Returns:
-            torch.Tensor: The normalized orthogonality loss.
-        """
         orthogonalities = self.ppnet.get_prototype_orthogonalities()
         orthogonality_loss = torch.norm(orthogonalities)
 
-        # Normalize the orthogonality loss by the number of elements
+        # normalize the orthogonality loss
         normalized_orthogonality_loss = orthogonality_loss / orthogonalities.numel()
 
         return normalized_orthogonality_loss

@@ -50,7 +50,7 @@ class EAT(L.LightningModule):
             'num_layers': cfg_decoder.num_layers,
         }
 
-        # Build student model
+        # build student model
         self.student = EAT_Student( 
             input_shape=(cfg_encoder.input_shape_t, cfg_encoder.input_shape_f),
             patch_size=(cfg_encoder.patch_size, cfg_encoder.patch_size),
@@ -68,7 +68,7 @@ class EAT(L.LightningModule):
             decoder_kwargs=decoder_kwargs,
         )
 
-        # Build teacher model
+        # build teacher model
         self.teacher = EAT_Teacher(
             input_shape=(cfg_encoder.input_shape_t, cfg_encoder.input_shape_f),
             patch_size=(cfg_encoder.patch_size, cfg_encoder.patch_size),
@@ -125,7 +125,6 @@ class EAT(L.LightningModule):
         # forward
         cls_pred, patch_pred, mask, patch_target = self(audio, self.mask_ratio)
 
-        # convert to float for loss computation
         cls_pred = cls_pred.float()
         patch_pred = patch_pred.float() 
         mask = mask.float()
@@ -144,14 +143,11 @@ class EAT(L.LightningModule):
         self.log('train_patch_loss', patch_loss, on_step=True, on_epoch=True, prog_bar=True)
         self.log('train_cls_loss', cls_loss, on_step=True, on_epoch=True, prog_bar=True)
 
-        # counter
         self.training_step_count += 1
 
         return total_loss
     
     def on_before_optimizer_step(self, optimizer):
-        
-        # clip gradients
         torch.nn.utils.clip_grad_norm_(self.student.parameters(), self.clip_norm)
 
         # EMA update teacher
@@ -208,7 +204,6 @@ class EAT(L.LightningModule):
                 }
                 return {"optimizer": optimizer, "lr_scheduler": scheduler_dict}
         else:
-            # No scheduler configured
             return {"optimizer": optimizer}
            
 # Decoder
