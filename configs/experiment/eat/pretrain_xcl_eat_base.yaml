@@ -1,0 +1,74 @@
+# @package _global_
+defaults:
+  - override /callbacks: default_ssl
+  - override /data/dataset: XCL
+  - override /data/loaders: audioset_balanced
+  - override /data/transform: pretrain_melbank_birdset
+  - override /logger: mlflow
+  - override /module/network: eat_vitbase_16
+  - override /module/optimizer: null
+  - override /module/scheduler: cosine
+  - override /module/loss: mean_squared_error 
+  - override /paths: cluster
+  #- override /trainer: single_gpu
+  - override /trainer: multi_gpu
+
+
+seed: 42
+start_time: ${now:%Y-%m-%d_%H%M%S}
+task_name: "pretrain_xcl_eat_base" 
+ckpt_path: null
+
+data:
+  loaders:
+    train: 
+      num_workers: 24
+      batch_size: 32
+      shuffle: true
+      pin_memory: false
+      drop_last: true
+      #prefetch_factor: 2
+  dataset: 
+    saved_images: null
+    #save_to_disk: /scratch/birdset/XCL/XCL_processed_ogg
+    save_to_disk: /scratch/birdset/XCL/XCL_processed_500_2events_ogg
+    test_in_val: false
+  transform:
+    waveform_augmentations: 
+      mixup_wave:
+        p: 0.0
+
+logger:
+  experiment_name: ${task_name}
+
+trainer:
+  max_epochs: 30
+  limit_val_batches: 0.0
+  check_val_every_n_epoch: 0
+  enable_checkpointing: true
+  gradient_clip_val: null
+  gradient_clip_val: 1.0
+  precision: 16-mixed
+
+module:
+  optimizer:
+    target:
+      lr: 1e-4
+      weight_decay: 1e-4
+    extras:
+      layer_decay: 0.0
+  network:
+    sampling_rate: 32_000 
+
+callbacks:
+  model_checkpoint:
+    dirpath: ${paths.output_dir}/callback_checkpoints
+    filename: ${module.network.name}_${data.dataset.name}_{epoch:02d}
+    save_last: true
+    save_weights_only: false
+    every_n_epochs: 5
+    save_top_k: -1
+    save_on_train_epoch_end: true
+
+# cluster saved 500 limit, 2 events: /mnt/datasets/bird_recordings/birdset_hf_download/XCL/XCL_processed_42_939daff71db5009b
+
