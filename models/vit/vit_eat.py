@@ -536,21 +536,55 @@ class VIT_EAT(L.LightningModule):
                         pretrained_state_dict[new_key] = value
                         
             elif "model" in checkpoint:
-                # standard model checkpoint
-                state_dict = checkpoint["model"]
-                pretrained_state_dict = {}
-                
-                for key, value in state_dict.items():
-                    if key.startswith("student.encoder."):
-                        new_key = key.replace("student.encoder.", "")
-                        new_key = self._map_eat_to_vit_key(new_key)
-                        pretrained_state_dict[new_key] = value
-                    elif key.startswith("encoder."):
-                        new_key = key.replace("encoder.", "")
-                        new_key = self._map_eat_to_vit_key(new_key)
-                        pretrained_state_dict[new_key] = value
-                    else:
-                        pretrained_state_dict[key] = value
+                # check if this is an original EAT checkpoint with modality encoders
+                if any(key.startswith("modality_encoders.IMAGE.") for key in checkpoint["model"].keys()):
+                    # original EAT AudioSet pretrained checkpoint
+                    audioset_state = checkpoint["model"]
+                    pretrained_state_dict = {}
+                    
+                    # map original EAT keys to VIT_EAT keys
+                    if "modality_encoders.IMAGE.extra_tokens" in audioset_state:
+                        pretrained_state_dict["cls_token"] = audioset_state["modality_encoders.IMAGE.extra_tokens"]
+                    
+                    if "modality_encoders.IMAGE.local_encoder.proj.weight" in audioset_state:
+                        pretrained_state_dict["patch_embed.proj.weight"] = audioset_state["modality_encoders.IMAGE.local_encoder.proj.weight"]
+                    
+                    if "modality_encoders.IMAGE.local_encoder.proj.bias" in audioset_state:
+                        pretrained_state_dict["patch_embed.proj.bias"] = audioset_state["modality_encoders.IMAGE.local_encoder.proj.bias"]
+                    
+                    if "modality_encoders.IMAGE.fixed_positional_encoder.positions" in audioset_state:
+                        # truncate to first 257 positions (cls + patches)
+                        pretrained_state_dict["pos_embed"] = audioset_state["modality_encoders.IMAGE.fixed_positional_encoder.positions"][:, :257]
+                    
+                    if "modality_encoders.IMAGE.context_encoder.norm.weight" in audioset_state:
+                        pretrained_state_dict["norm.weight"] = audioset_state["modality_encoders.IMAGE.context_encoder.norm.weight"]
+                    
+                    if "modality_encoders.IMAGE.context_encoder.norm.bias" in audioset_state:
+                        pretrained_state_dict["norm.bias"] = audioset_state["modality_encoders.IMAGE.context_encoder.norm.bias"]
+                    
+                    # copy all transformer blocks 
+                    for key, value in audioset_state.items():
+                        if key.startswith("blocks."):
+                            pretrained_state_dict[key] = value
+                            
+                    print(f"Loaded original EAT AudioSet checkpoint with {len(pretrained_state_dict)} parameters")
+                    
+                else:
+                    # standard model checkpoint
+                    state_dict = checkpoint["model"]
+                    pretrained_state_dict = {}
+                    
+                    for key, value in state_dict.items():
+                        if key.startswith("student.encoder."):
+                            new_key = key.replace("student.encoder.", "")
+                            new_key = self._map_eat_to_vit_key(new_key)
+                            pretrained_state_dict[new_key] = value
+                        elif key.startswith("encoder."):
+                            new_key = key.replace("encoder.", "")
+                            new_key = self._map_eat_to_vit_key(new_key)
+                            pretrained_state_dict[new_key] = value
+                        else:
+                            pretrained_state_dict[key] = value
             else:
                 pretrained_state_dict = checkpoint
             

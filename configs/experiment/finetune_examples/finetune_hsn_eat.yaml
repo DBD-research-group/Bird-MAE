@@ -26,8 +26,8 @@ logger:
 data:
   loaders:
     train: 
-      num_workers: 16
-      batch_size: 64
+      num_workers: 24
+      batch_size: 128
       #batch_size: 20
       shuffle: true
       drop_last: true
@@ -60,8 +60,9 @@ module:
   network:
     freeze_backbone: false
     global_pool: cls
-    ppnet_cfg: null
-      # last_layer_lr: ${module.optimizer.target.lr}
-      # prototype_lr: 0.04
-      # focal_similarity: true
+    ppnet_cfg: 
+      last_layer_lr: ${module.optimizer.target.lr}
+      prototype_lr: 0.04
+      focal_similarity: true
+      num_prototypes: 20
       
