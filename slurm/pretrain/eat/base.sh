@@ -25,7 +25,7 @@ export HYDRA_FULL_ERROR=1
 
 hostname
 srun python pretrain.py \
-        experiment=paper/pretrain/pretrain_xcl_wave_large.yaml \
+        experiment=eat/pretrain_xcl_eat_base.yaml \
         trainer.devices=4 \
         +trainer.num_nodes=1 \
         trainer.precision=16-mixed \
