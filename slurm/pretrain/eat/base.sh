@@ -6,7 +6,7 @@
 #SBATCH --mem=450gb
 #SBATCH --partition=main
 #SBATCH --job-name=eat_base_xcl
-#SBATCH --output=/mnt/work/bird2vec/logs/eat/eat_base%N_%t_0.3mix_baseline.log
+#SBATCH --output=/mnt/work/bird2vec/logs/eat/eat_base.log
 #SBATCH --time=96:00:00
 ###SBATCH --exclude=gpu-v100-3
 #SBATCH --nodelist=gpu-l40s-1

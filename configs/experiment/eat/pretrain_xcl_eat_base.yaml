@@ -46,7 +46,6 @@ trainer:
   limit_val_batches: 0.0
   check_val_every_n_epoch: 0
   enable_checkpointing: true
-  gradient_clip_val: null
   gradient_clip_val: 1.0
   precision: 16-mixed
 
