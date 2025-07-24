@@ -4,7 +4,7 @@ defaults:
   - override /data/dataset: XCL
   - override /data/loaders: audioset_balanced
   - override /data/transform: pretrain_melbank_birdset
-  - override /logger: mlflow
+  - override /logger: mlflow_sql
   - override /module/network: eat_vitbase_16
   - override /module/optimizer: null
   - override /module/scheduler: cosine
@@ -18,6 +18,13 @@ seed: 42
 start_time: ${now:%Y-%m-%d_%H%M%S}
 task_name: "pretrain_xcl_eat_base" 
 ckpt_path: null
+
+paths:
+  log_dir: /mnt/work/bird2vec/logs_pretrain_eat
+
+logger:
+  experiment_name: ${task_name}
+  tracking_uri: sqlite:////mnt/work/bird2vec/ssl.db
 
 data:
   loaders:
@@ -38,8 +45,6 @@ data:
       mixup_wave:
         p: 0.0
 
-logger:
-  experiment_name: ${task_name}
 
 trainer:
   max_epochs: 30

@@ -7,7 +7,7 @@
 #SBATCH --partition=main
 #SBATCH --job-name=eat_base_xcl
 #SBATCH --output=/mnt/work/bird2vec/logs/eat/eat_base.log
-#SBATCH --time=96:00:00
+#SBATCH --time=140:00:00
 ###SBATCH --exclude=gpu-v100-3
 #SBATCH --nodelist=gpu-l40s-1
 
@@ -31,7 +31,7 @@ srun python pretrain.py \
         trainer.precision=16-mixed \
         data.transform.waveform_augmentations.mixup_wave.p=0.0 \
         trainer.max_epochs=30 \
-        data.loaders.train.batch_size=32 \
+        data.loaders.train.batch_size=64 \
         trainer.gradient_clip_val=1.0 \
         module.optimizer.target.lr=5e-4 \
 
