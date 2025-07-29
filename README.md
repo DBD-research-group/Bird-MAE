@@ -128,10 +128,14 @@ python train.py experiment="paper/fewshot/$probing/$probing/$dataset_kshots"
 ```
 
 ## Checkpoints
-- Bird-MAE Base: Link
-- Bird-MAE Large: Link
-- Bird-MAE Huge: Link
-
+**Models with architecures**
+- [Bird-MAE Base](https://huggingface.co/DBD-research-group/Bird-MAE-Base)
+- [Bird-MAE Large](https://huggingface.co/DBD-research-group/Bird-MAE-Large)
+- [Bird-MAE Huge](https://huggingface.co/DBD-research-group/Bird-MAE-Huge)
+  
+**Only checkpoints**
+- [Checkpoints](https://huggingface.co/DBD-research-group/Bird-MAE)
+  
 ## Citation 
 ```
 @article{rauch2025birdmae,
