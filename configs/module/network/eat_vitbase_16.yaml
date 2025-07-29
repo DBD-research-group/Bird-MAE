@@ -1,4 +1,5 @@
 defaults:
+ # - decoder: mlp_lstm
   - decoder: cnn2d
 
 name: EAT
@@ -17,7 +18,8 @@ encoder:
   num_heads: 12
   mlp_ratio: 4
   qkv_bias: true
-  dropout: 0.0
+  drop: 0.0
+  attn_drop: 0.0
   drop_path_rate: 0.0
   pos_trainable: false
   clone_size: 16

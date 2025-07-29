@@ -174,6 +174,8 @@ def build_model(cfg_module: DictConfig):
             mlp_ratio=cfg_module.network.mlp_ratio,
             qkv_bias=cfg_module.network.qkv_bias,
             eps=cfg_module.network.eps,
+            drop=cfg_module.network.drop,
+            attn_drop=cfg_module.network.attn_drop,
             drop_path=cfg_module.network.drop_path,
             num_heads=cfg_module.network.num_heads,
             depth=cfg_module.network.depth,

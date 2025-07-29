@@ -74,7 +74,7 @@ class EAT(L.LightningModule):
             num_heads=cfg_encoder.num_heads,
             mlp_ratio=cfg_encoder.mlp_ratio,
             qkv_bias=cfg_encoder.qkv_bias,
-            dropout=cfg_encoder.dropout,
+            drop=cfg_encoder.drop,
             drop_path_rate=cfg_encoder.drop_path_rate,
             pos_trainable=cfg_encoder.pos_trainable,
             clone_size=cfg_encoder.clone_size,
@@ -92,7 +92,7 @@ class EAT(L.LightningModule):
             num_heads=cfg_encoder.num_heads,
             mlp_ratio=cfg_encoder.mlp_ratio,
             qkv_bias=cfg_encoder.qkv_bias,
-            dropout=cfg_encoder.dropout,
+            drop=cfg_encoder.drop,
             drop_path_rate=cfg_encoder.drop_path_rate,
             pos_trainable=cfg_encoder.pos_trainable,
             clone_size=cfg_encoder.clone_size,
@@ -733,21 +733,35 @@ class EAT_Student(nn.Module):
                  num_heads=12,
                  mlp_ratio=4,
                  qkv_bias=True,
-                 dropout=0,
+                 drop=0,
+                 attn_drop=0,
                  drop_path_rate=0,
                  pos_trainable=False,
                  clone_size=16,
                  mask_mode='inv',
                  decoder_cls=CNN2dDecoder,
                  decoder_kwargs={'kernel_size': 3, 'stride': 1, 'padding': 'same', 'groups': 16, 'activation': nn.GELU, 'add_residual': True, 'num_layers': 6},
-                 attn_drop=0.,
-                 drop=0.,
                 ):
         
         super().__init__()
 
         # student encoder & decoder
-        self.encoder = ViT_MaskedEncoder(input_shape, patch_size, embed_dim, depth, attn_drop, num_heads, mlp_ratio, qkv_bias, drop, attn_drop, drop_path_rate, pos_trainable, clone_size, mode='student', mask_mode=mask_mode)
+        self.encoder = ViT_MaskedEncoder(
+                input_shape=input_shape, 
+                patch_size=patch_size, 
+                embed_dim=embed_dim, 
+                depth=depth, 
+                attn_drop=attn_drop,
+                num_heads=num_heads, 
+                mlp_ratio=mlp_ratio, 
+                qkv_bias=qkv_bias, 
+                drop=drop, 
+                drop_path_rate=drop_path_rate, 
+                pos_trainable=pos_trainable, 
+                clone_size=clone_size, 
+                mode='student', 
+                mask_mode=mask_mode)
+        
         num_freq_patches, num_time_patches = self.encoder.patch_embed.patch_ft
         self.decoder = decoder_cls(embed_dim, num_freq_patches=num_freq_patches, num_time_patches=num_time_patches, **decoder_kwargs)
         self.initialize_weights()
@@ -792,7 +806,8 @@ class EAT_Teacher(nn.Module):
                  num_heads=12,
                  mlp_ratio=4,
                  qkv_bias=True,
-                 dropout=0,
+                 drop=0,
+                 attn_drop=0,
                  drop_path_rate=0,
                  pos_trainable=False,
                  clone_size=16,
@@ -806,7 +821,21 @@ class EAT_Teacher(nn.Module):
         
         super().__init__()
 
-        self.encoder = ViT_MaskedEncoder(input_shape, patch_size, embed_dim, depth, num_heads, mlp_ratio, qkv_bias, dropout, drop_path_rate, pos_trainable, clone_size, mode='teacher')
+        self.encoder = ViT_MaskedEncoder(
+            input_shape=input_shape, 
+            patch_size=patch_size, 
+            embed_dim=embed_dim, 
+            depth=depth, 
+            num_heads=num_heads, 
+            mlp_ratio=mlp_ratio, 
+            qkv_bias=qkv_bias, 
+            drop=drop, 
+            attn_drop=attn_drop,
+            drop_path_rate=drop_path_rate, 
+            pos_trainable=pos_trainable, 
+            clone_size=clone_size, 
+            mode='teacher')
+        
         self.clone_size = clone_size
         self.average_top_k_layers = average_top_k_layers
         self.instance_norm_target_layer = instance_norm_target_layer

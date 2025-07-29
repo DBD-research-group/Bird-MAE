@@ -1,4 +1,3 @@
-# @package _global_.decoder
 name: "CNN2d"
 kernel_size: 3
 stride: 1
