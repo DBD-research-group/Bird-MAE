@@ -1,0 +1,58 @@
+# @package _global_
+defaults:
+  - override /callbacks: default_ssl
+  - override /data/dataset: NES
+  - override /data/loaders: esc50
+  - override /data/transform: melbank_birdset
+  - override /logger: mlflow
+  - override /module/network: vit_large_16.yaml
+  - override /module/optimizer: adamw
+  - override /module/scheduler: cosine
+  - override /module/loss: asymmetric_loss.yaml
+  - override /module/metric: birdset_collection
+  - override /paths: cluster
+  - override /trainer: single_gpu
+
+seed: 1
+start_time: ${now:%Y-%m-%d_%H%M%S}
+task_name: "finetune_nes"
+
+train: true
+test: true
+
+logger:
+  experiment_name: full_nes
+  run_name: birdMAE_nes_large_linear_64shot_${seed}_${start_time}
+
+data:
+  loaders:
+    train: 
+      num_workers: 16
+      batch_size: 64
+      shuffle: true
+      drop_last: true
+  dataset:
+    save_to_disk: /scratch/birdset/NES/NES_64shot_1
+
+trainer:
+  max_epochs: 30
+  limit_val_batches: 1.0
+  check_val_every_n_epoch: 2
+  gradient_clip_val: 2
+  precision: 16-mixed
+  num_sanity_val_steps: 0
+
+
+module:
+  optimizer:
+    target:
+      lr: 4e-4
+      weight_decay: 3e-4
+      
+    extras:
+      layer_decay: 0.75
+      decay_type: right
+      
+  network:
+    ema_update_rate: null
+    freeze_backbone: true 

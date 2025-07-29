@@ -1,37 +1,39 @@
 # @package _global_
 defaults:
-  - override /callbacks: default
-  - override /data/dataset: HSN
+  - override /callbacks: default_ssl
+  - override /data/dataset: UHH
   - override /data/loaders: esc50
   - override /data/transform: melbank_birdset
-  - override /logger: mlflow_sql
-  - override /module/network: vit_base_16_eat.yaml
+  - override /logger: mlflow
+  - override /module/network: vit_base_16.yaml
   - override /module/optimizer: adamw
   - override /module/scheduler: cosine
-  - override /module/loss: asymmetric_loss
+  - override /module/loss: asymmetric_loss.yaml
   - override /module/metric: birdset_collection
-  - override /paths: workstation
+  - override /paths: cluster
   - override /trainer: single_gpu
 
-seed: 42
+seed: 1
 start_time: ${now:%Y-%m-%d_%H%M%S}
-task_name: "eat_hsn"
+task_name: "finetune_uhh"
 
 train: true
 test: true
 
 logger:
-  experiment_name: ${task_name}
+  experiment_name: full_uhh
+  run_name: audioMAE_uhh_base_ppnet_allshot_${seed}_${start_time}
 
 data:
   loaders:
     train: 
-      num_workers: 24
+      num_workers: 16
       batch_size: 128
       #batch_size: 20
       shuffle: true
       drop_last: true
-
+  dataset:
+    save_to_disk: /scratch/birdset/UHH/UHH_processed_42_db84ae1732b16771_5d36d23152f56066_f61fff834b2c8c3b
     
 trainer:
   max_epochs: 30
@@ -46,24 +48,23 @@ trainer:
 module:
   optimizer:
     target:
-      #lr: 5e-4
-      lr: 4e-4
+      #lr: 5e-5
+      lr: 3e-4
       #lr: 5e-4
       #lr: 1e-4
       #weight_decay: 3e-2
       weight_decay: 3e-4
       
     extras:
+      #layer_decay: 0.75
       layer_decay: 0.75
+      #decay_type: inverse_normal
       decay_type: right
       
   network:
+    pretrained_weights_path: /mnt/work/bird2vec/amae_as2m_pretrained.pth
+    name: VIT_ppnet
     freeze_backbone: false
-    global_pool: cls
-    pretrained_weights_path: /home/lrauch/mnt_check/pretrain_xcl_eat_base/runs/XCL/EAT/2025-07-23_225933/callback_checkpoints/EAT_XCL_epoch=29.ckpt
-    ppnet_cfg: 
-      last_layer_lr: ${module.optimizer.target.lr}
-      prototype_lr: 0.04
-      focal_similarity: true
-      num_prototypes: 20
-      
+    # ppnet:
+    #   num_prototypes: 20
+    #   last_layer_lr: 3e-4 

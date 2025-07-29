@@ -3,6 +3,7 @@ from datetime import datetime
 from functools import partial
 import numpy as np
 import math
+import random
 from tqdm import tqdm
 import torch
 from torch import nn
@@ -41,14 +42,28 @@ class EAT(L.LightningModule):
 
         activation = nn.GELU
 
-        decoder_kwargs = {
-            'kernel_size': cfg_decoder.kernel_size,
-            'stride': cfg_decoder.stride,
-            'padding': cfg_decoder.padding,
-            'groups': cfg_decoder.groups,
-            'activation': activation,
-            'num_layers': cfg_decoder.num_layers,
-        }
+        if cfg_decoder.name == "CNN2d":
+            decoder_cls = CNN2dDecoder
+            decoder_kwargs = {
+                'kernel_size': cfg_decoder.kernel_size,
+                'stride': cfg_decoder.stride,
+                'padding': cfg_decoder.padding,
+                'groups': cfg_decoder.groups,
+                'activation': activation,
+                'num_layers': cfg_decoder.num_layers,
+            }
+        elif cfg_decoder.name == "MLP_LSTM":
+            decoder_cls = MLP_LSTM_Decoder
+            decoder_kwargs = {
+                'drop': cfg_decoder.drop,
+                'activation': activation,
+                'bidirectional': cfg_decoder.bidirectional,
+                'add_residual': cfg_decoder.add_residual,
+                'num_layers': cfg_decoder.num_layers,
+            }
+        else:
+            raise ValueError(f"Decoder name {cfg_decoder.name} not supported")
+
 
         # build student model
         self.student = EAT_Student( 
@@ -64,7 +79,7 @@ class EAT(L.LightningModule):
             pos_trainable=cfg_encoder.pos_trainable,
             clone_size=cfg_encoder.clone_size,
             mask_mode=cfg_encoder.mask_mode,
-            decoder_cls=CNN2dDecoder,
+            decoder_cls=decoder_cls,
             decoder_kwargs=decoder_kwargs,
         )
 
@@ -138,10 +153,21 @@ class EAT(L.LightningModule):
         cls_loss = torch.mean((cls_pred-cls_target)**2.)
         total_loss = patch_loss + cls_loss
 
-        # logging
-        self.log('train_loss', total_loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.log('train_patch_loss', patch_loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.log('train_cls_loss', cls_loss, on_step=True, on_epoch=True, prog_bar=True)
+        batch_size = audio.shape[0]*self.student.clone_size
+
+        self.log_dict(
+            {
+                "train_loss":       total_loss,
+                "train_patch_loss": patch_loss,
+                "train_cls_loss":   cls_loss,
+            },
+            on_step=True,              # 
+            on_epoch=True,             # 
+            prog_bar=True,
+            sync_dist=True,            # all‑reduce before logging
+            rank_zero_only=True,       # only the main process writes
+            batch_size=audio.size(0),
+        )
 
         self.training_step_count += 1
 
@@ -162,6 +188,15 @@ class EAT(L.LightningModule):
         pass
 
     def configure_optimizers(self):
+        if self.optimizer_cfg.get("lr scaler", False):
+            accum = int(self.trainer.accumulate_grad_batches)  
+            world_size = self.trainer.num_devices * self.trainer.num_nodes
+            clone_fac = getattr(self.student, "clone_size", 1)
+            eff_batch = accum * world_size * self.train_batch_size * clone_fac
+
+            base_lr = self.optimizer_cfg["lr"]            # 0.0005 from paper
+            scaled_lr = base_lr * eff_batch / 768 # 768 = 12*16*4
+            self.optimizer_cfg["lr"] = scaled_lr        
 
         param_groups = param_groups_weight_decay(
             self.student, 
@@ -245,8 +280,50 @@ class CNN2dDecoder(nn.Module):
         x = x.flatten(2).transpose(-2, -1)  # B, L, D
         return self.proj(x)
 
-# Vit Encoder for EAT
+## MLP-LSTM
+class MLP_LSTM_Block(nn.Module):
+    
+    def __init__(self, dim=768, drop=0., activation=nn.GELU, bidirectional=True, add_residual=True):
+        super().__init__()
+        self.add_residual = add_residual
+        self.act = activation()
+        self.fc1 = nn.Linear(dim, dim, bias=False)
+        self.ln1 = nn.LayerNorm(dim)
+        self.drop = nn.Dropout(drop)
+        self.lstm = nn.LSTM(dim, dim, batch_first=True, bidirectional=bidirectional)
+        fc2_inp_size = int(dim * 2) if bidirectional else dim
+        self.fc2 =  nn.Linear(fc2_inp_size, dim, bias=False)
+        self.ln2 = nn.LayerNorm(dim)
+                
+    def forward(self, x):
+        self.lstm.flatten_parameters()
+        z = self.fc1(x)
+        z = self.act(z)
+        z = self.ln1(z)
+        z = self.drop(z)
+        with torch.autocast(device_type='cuda', enabled=False):  # device_type=x.device
+            z = z.float()
+            z, _ = self.lstm(z)
+        z = self.fc2(z)
+        z = self.act(z)
+        out = self.ln2(z)
+        if self.add_residual:
+            out = out + x
+        return out
 
+class MLP_LSTM_Decoder(nn.Module):
+    def __init__(self, dim=768, drop=0., activation=nn.GELU, bidirectional=True, add_residual=True, num_layers=3, **kwargs):
+        super().__init__()
+        self.blocks = nn.Sequential(*[MLP_LSTM_Block(dim, drop, activation, bidirectional, add_residual) for _ in range(num_layers)])
+        self.mask_token = nn.Parameter(torch.randn(1, 1, dim) * 0.02)
+        
+    def forward(self, x, ids_restore):
+        mask_tokens = self.mask_token.repeat(x.shape[0], ids_restore.shape[1] - x.shape[1], 1)
+        x = torch.cat([x, mask_tokens], dim=1)
+        x = torch.gather(x, dim=1, index=ids_restore)
+        return self.blocks(x)
+
+# Vit Encoder for EAT
 ## https://github.com/huggingface/pytorch-image-models/blob/main/timm/layers/drop.py#L170
 def drop_path(x, drop_prob: float = 0., training: bool = False, scale_by_keep: bool = True):
     """Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks).
@@ -282,6 +359,28 @@ class DropPath(nn.Module):
     def extra_repr(self):
         return f'drop_prob={round(self.drop_prob,3):0.3f}'
 
+class Mlp(nn.Module):
+    """ MLP as used in Vision Transformer, MLP-Mixer and related networks """
+    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, norm_layer=None, bias=True, drop=0.):
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+        self.fc1 = nn.Linear(in_features, hidden_features, bias=bias)
+        self.act = act_layer()
+        self.drop1 = nn.Dropout(drop)
+        self.norm = norm_layer(hidden_features) if norm_layer is not None else nn.Identity()
+        self.fc2 = nn.Linear(hidden_features, out_features, bias=bias)
+        self.drop2 = nn.Dropout(drop)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.drop1(x)
+        x = self.norm(x)
+        x = self.fc2(x)
+        x = self.drop2(x)
+        return x
+
 class FeedForward(nn.Module):
 
     def __init__(self, in_dim, hid_dim, dropout=0.):
@@ -292,31 +391,83 @@ class FeedForward(nn.Module):
         return self.ffn(x)
 
 class Attention(nn.Module):
-
-    def __init__(self, in_dim, num_heads=None, qkv_bias=True, attn_drop=0, proj_drop=0):
+    def __init__(self, dim, num_heads=8, qkv_bias=False, qk_norm=False, scale_norm=False, proj_bias=True, attn_drop=0., proj_drop=0., norm_layer=nn.LayerNorm):
+        """
+        Args:
+            dim: Input dimension of the token embeddings
+            num_heads: Number of attention heads
+            qkv_bias: Whether to use bias in the query, key, value projections
+            qk_norm: Whether to apply normalization to query and key vectors
+            proj_bias: Whether to use bias in the output projection
+            attn_drop: Dropout rate applied to the attention weights
+            proj_drop: Dropout rate applied after the output projection
+            norm_layer: Normalization layer constructor for QK normalization if enabled
+        """
         super().__init__()
+        assert dim % num_heads == 0, 'dim should be divisible by num_heads'
+        # if qk_norm or scale_norm:
+            # assert norm_layer is not None, 'norm_layer must be provided if qk_norm or scale_norm is True'
         self.num_heads = num_heads
-        self.head_dim = in_dim // num_heads
+        self.head_dim = dim // num_heads
         self.scale = self.head_dim ** -0.5
-        self.qkv = nn.Linear(in_dim, in_dim * 3, bias=qkv_bias)
-        self.proj = nn.Linear(in_dim, in_dim)
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
+        self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.attn_drop = nn.Dropout(attn_drop)
+        self.norm = norm_layer(dim) if scale_norm else nn.Identity()
+        self.proj = nn.Linear(dim, dim, bias=proj_bias)
         self.proj_drop = nn.Dropout(proj_drop)
-        # self.tau = nn.Parameter(torch.ones(1, num_heads, 1, 1)) if use_tau else None
 
-    def forward(self, x):
-        batch_size, seq_len, feat_dim = x.shape
-        qkv = self.qkv(x).reshape(batch_size, seq_len, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+    def forward(self, x, attn_mask=None):
+        B, N, C = x.shape
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
-        attn = (q * self.scale) @ k.transpose(-2, -1)  # B, H, N, D @ B, H, D, N
-        # if self.tau is not None:
-            # attn = attn * self.tau
+        q, k = self.q_norm(q), self.k_norm(k)
+      
+        q = q * self.scale
+        attn = q @ k.transpose(-2, -1)
+        # attn = maybe_add_mask(attn, attn_mask)
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
-        x = attn @ v  # B, H, N, N @ B, H, N, D -> B, H, N, D
-        x = x.transpose(1, 2).reshape(batch_size, seq_len, feat_dim)  # B, H, N, D -> B, N, H, D -> B, N, H * D
+        x = attn @ v
+
+        x = x.transpose(1, 2).reshape(B, N, C)
+        x = self.norm(x)
         x = self.proj(x)
-        return self.proj_drop(x)
+        x = self.proj_drop(x)
+        return x
+        
+
+class AltBlock(nn.Module):
+    def __init__(self, dim, num_heads, mlp_ratio=4.0, qkv_bias=False, drop=0.0, attn_drop=0.0, drop_path=0.0, act_layer=nn.GELU, norm_layer=nn.LayerNorm, layer_norm_first=False, ffn_targets=True):
+        super().__init__()
+
+        self.layer_norm_first = layer_norm_first
+        self.ffn_targets = ffn_targets
+        self.norm1 = norm_layer(dim)
+        self.attn = Attention(dim, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)
+        self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
+        self.norm2 = norm_layer(dim)
+        mlp_hidden_dim = int(dim * mlp_ratio)
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+
+    def forward(self, x, rel_pos_bias=None, pos_mask=None):
+        if self.layer_norm_first:
+            x = x + self.drop_path(self.attn(self.norm1(x)))
+            t = self.mlp(self.norm2(x))
+            x = x + self.drop_path(t)
+            if not self.ffn_targets:
+                t = x
+            return x, t
+        else:
+            x = x + self.drop_path(self.attn(x))
+            r = x = self.norm1(x)
+            x = self.mlp(x)
+            t = x
+            x = self.norm2(r + self.drop_path(x))
+            if not self.ffn_targets:
+                t = x
+            return x, t
 
 class EncoderBlock(nn.Module):
 
@@ -364,20 +515,39 @@ class PatchEmbed(nn.Module):
         x = x.transpose(1, 2) # B, 768, 256 -> B, 256, 768
         return x
 
-class EAT_Encoder(nn.Module):
-    def __init__(self, input_shape=(512, 128), patch_size=(16, 16), embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True, dropout=0., drop_path_rate=0., pos_trainable=False, clone_size=16, mode='student', mask_mode='inv'):
+class ViT_MaskedEncoder(nn.Module): #eaT_encoder before
+    def __init__(
+        self, 
+        input_shape=(512, 128), 
+        patch_size=(16, 16), 
+        embed_dim=768, 
+        depth=12, 
+        num_heads=12, 
+        mlp_ratio=4, 
+        qkv_bias=True, 
+        drop=0., 
+        attn_drop=0., 
+        drop_path_rate=0., 
+        pos_trainable=False, 
+        clone_size=16, 
+        mode='student', 
+        mask_mode='inv'):
+
         super().__init__()
         
         assert mode in ['student', 'teacher']
-        assert mask_mode in ['rand', 'inv']
+        assert mask_mode in ['rand', 'inv', 'seq']
         assert (input_shape[0] % patch_size[0]) == 0 and (input_shape[1] % patch_size[1]) == 0
         
         if mode == 'student':
             self.forward_fn = self.student_forward
             if mask_mode == 'rand':
                 self.mask_fn = self.random_masking
-            else:
+            elif mask_mode == 'inv':
                 self.mask_fn = self.inverse_block_mask
+            else:
+                self.mask_fn = self.sequential_mask
+                assert patch_size[0] == 1 and patch_size[1] == input_shape[1]
         else:
             self.forward_fn = self.teacher_forward
             self.mask_fn = None
@@ -385,20 +555,50 @@ class EAT_Encoder(nn.Module):
         self.clone_size = clone_size
         self.patch_size = patch_size
         self.patch_embed = PatchEmbed(input_shape, patch_size, 1, embed_dim)
-        self.pos_embed = nn.Parameter(torch.zeros(1, self.patch_embed.num_patches + 1, embed_dim), requires_grad=pos_trainable)
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim)) # 1, 1, 768
+        pos_embed = get_2d_sincos_pos_embed_flexible(embed_dim, self.patch_embed.patch_ft, cls_token=True)
+        self.pos_embed = nn.Parameter(torch.from_numpy(pos_embed).float().unsqueeze(0), requires_grad=pos_trainable)
+        self.cls_token = nn.Parameter(torch.randn(1, 1, embed_dim) * 0.02) # 1, 1, 768
         norm_layer = partial(nn.LayerNorm, eps=1e-6)
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
-        self.blocks = nn.ModuleList([EncoderBlock(embed_dim, num_heads, mlp_ratio, qkv_bias, dropout, dpr[i], norm_layer) for i in range(depth)])
+        self.blocks = nn.ModuleList([AltBlock(embed_dim, num_heads, mlp_ratio, qkv_bias, drop, attn_drop, dpr[i], norm_layer=norm_layer) for i in range(depth)])
         self.norm = norm_layer(embed_dim)
-    
-    def inverse_block_mask(self, shape, mask_ratio=0.8, num_freq_patches=8, num_time_patches=32, mask_length=5, mask_prob_adjust=0.07, require_same_masks=True):
+
+    def sequential_mask(self, shape, mask_ratio=0.8, num_sub_seq=4):
+        
+        if mask_ratio == 0:
+            return None, None, None
+                
+        B, L, D = shape
+        B = B * self.clone_size
+        sub_seq_len = L // num_sub_seq
+        sub_seq_mask_len = int(mask_ratio * sub_seq_len)
+        sub_seq_mask_max_start_idx = sub_seq_len - sub_seq_mask_len
+
+        # 1 are places to remove, 0 are places to keep.
+        mask = torch.zeros((B, L))
+        for b in range(B):
+            for i in range(num_sub_seq):
+                start = random.randint(0, sub_seq_mask_max_start_idx - 1) + i * sub_seq_len
+                mask[b, start:start+sub_seq_mask_len] = 1
+            
+        mask = mask.to(torch.uint8)
+        ids_shuffle = mask.argsort(dim=1)
+        ids_restore = ids_shuffle.argsort(dim=1).unsqueeze(-1).expand(-1, -1, D)
+        
+        len_keep = L - mask[0].sum()
+        ids_keep = ids_shuffle[:, :len_keep]
+        ids_keep = ids_keep.unsqueeze(-1).expand(-1, -1, D)
+        
+        return mask.float(), ids_keep, ids_restore
+        
+    def inverse_block_mask(self, shape, mask_ratio=0.8, mask_length=5, mask_prob_adjust=0.07, require_same_masks=True):
         
         if mask_ratio == 0:
             return None, None, None
         
         assert mask_length > 1
         
+        num_freq_patches, num_time_patches = self.patch_embed.patch_ft
         B, L, D = shape
         B = B * self.clone_size
         d = (num_time_patches, num_freq_patches)
@@ -449,7 +649,7 @@ class EAT_Encoder(nn.Module):
         ids_keep = ids_keep.unsqueeze(-1).expand(-1, -1, D)
         return mask.float(), ids_keep, ids_restore
     
-    def random_masking(self, shape, mask_ratio=0.8, *args):
+    def random_masking(self, shape, mask_ratio=0.8):
         
         if mask_ratio == 0:
             return None, None, None
@@ -458,7 +658,7 @@ class EAT_Encoder(nn.Module):
         B *= self.clone_size
         
         len_keep = int(L * (1 - mask_ratio))    
-        noise = torch.rand(B, L, device=x.device)  # noise in [0, 1]
+        noise = torch.rand(B, L)  # noise in [0, 1]
         
         # sort noise for each sample
         ids_shuffle = noise.argsort(dim=1)  # ascend: small is keep, large is remove
@@ -477,14 +677,13 @@ class EAT_Encoder(nn.Module):
         ids_keep = ids_keep.unsqueeze(-1).expand(-1, -1, D)
         
         return mask, ids_keep, ids_restore
-
-    def student_forward(self, x, mask_ratio=0.8):
+                
+    def student_forward(self, x, mask_ratio=None):
         x = self.patch_embed(x)  # B, 1, T, F -> B, L=256, D=768
         x = x + self.pos_embed[:, 1:, :]
         
-        # generate masks of shape: (B*clone_size, L) 
-        num_freq_patches, num_time_patches = self.patch_embed.patch_ft
-        mask, ids_keep, ids_restore = self.mask_fn(x.shape, mask_ratio, num_freq_patches, num_time_patches)
+        # generate masks of shape: (B*clone_size, L)
+        mask, ids_keep, ids_restore = self.mask_fn(x.shape, mask_ratio)
         mask, ids_keep, ids_restore = mask.to(x.device), ids_keep.to(x.device), ids_restore.to(x.device)
 
         # repeat the inputs for clone_size on batch axis
@@ -509,7 +708,7 @@ class EAT_Encoder(nn.Module):
         
         return cls_pred, patch_pred, mask, ids_restore
 
-    def teacher_forward(self, x, mask_ratio=0):
+    def teacher_forward(self, x, mask_ratio=None):
         x = self.patch_embed(x)  # B, C=1, T=512, F=128 -> B, L=256, D=768
         cls_tokens = self.cls_token.expand(x.shape[0], -1, -1)
         x = torch.cat((cls_tokens, x), dim=1)
@@ -520,7 +719,7 @@ class EAT_Encoder(nn.Module):
             features.append(t[:, 1:, :].clone())
         return features
        
-    def forward(self, x, mask_ratio=0.8): 
+    def forward(self, x, mask_ratio=None): 
         return self.forward_fn(x, mask_ratio)
 
 # Student model for EAT
@@ -541,12 +740,14 @@ class EAT_Student(nn.Module):
                  mask_mode='inv',
                  decoder_cls=CNN2dDecoder,
                  decoder_kwargs={'kernel_size': 3, 'stride': 1, 'padding': 'same', 'groups': 16, 'activation': nn.GELU, 'add_residual': True, 'num_layers': 6},
+                 attn_drop=0.,
+                 drop=0.,
                 ):
         
         super().__init__()
 
         # student encoder & decoder
-        self.encoder = EAT_Encoder(input_shape, patch_size, embed_dim, depth, num_heads, mlp_ratio, qkv_bias, dropout, drop_path_rate, pos_trainable, clone_size, mode='student', mask_mode=mask_mode)
+        self.encoder = ViT_MaskedEncoder(input_shape, patch_size, embed_dim, depth, attn_drop, num_heads, mlp_ratio, qkv_bias, drop, attn_drop, drop_path_rate, pos_trainable, clone_size, mode='student', mask_mode=mask_mode)
         num_freq_patches, num_time_patches = self.encoder.patch_embed.patch_ft
         self.decoder = decoder_cls(embed_dim, num_freq_patches=num_freq_patches, num_time_patches=num_time_patches, **decoder_kwargs)
         self.initialize_weights()
@@ -605,7 +806,7 @@ class EAT_Teacher(nn.Module):
         
         super().__init__()
 
-        self.encoder = EAT_Encoder(input_shape, patch_size, embed_dim, depth, num_heads, mlp_ratio, qkv_bias, dropout, drop_path_rate, pos_trainable, clone_size, mode='teacher')
+        self.encoder = ViT_MaskedEncoder(input_shape, patch_size, embed_dim, depth, num_heads, mlp_ratio, qkv_bias, dropout, drop_path_rate, pos_trainable, clone_size, mode='teacher')
         self.clone_size = clone_size
         self.average_top_k_layers = average_top_k_layers
         self.instance_norm_target_layer = instance_norm_target_layer

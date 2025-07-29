@@ -1,3 +1,6 @@
+defaults:
+  - decoder: cnn2d
+
 name: EAT
 sampling_rate: 32_000
 norm_layer: nn.LayerNorm
@@ -20,14 +23,15 @@ encoder:
   clone_size: 16
   mask_mode: 'inv'        # ''rand' for random masking
 
-decoder:
-  kernel_size: 3
-  stride: 1
-  padding: 'same'
-  groups: 16
-  activation: nn.GELU
-  add_residual: true
-  num_layers: 6
+# decoder:
+#   name: 
+#   kernel_size: 3
+#   stride: 1
+#   padding: 'same'
+#   groups: 16
+#   activation: nn.GELU
+#   add_residual: true
+#   num_layers: 6
 
 teacher:
   average_top_k_layers: 12
@@ -42,9 +46,10 @@ optimizer:
     lr: 0.0005
     weight_decay: 0.05
     betas: [0.9, 0.95]
-    train_batch_size: 12  # Your actual batch size
+    train_batch_size: ${data.loaders.train.batch_size}  
     layer_decay: 1.0
     clip_norm: 4.0
+    lr_scaler: false
 
 scheduler:
   use_custom_scheduler: true  # Set to false to use cosine scheduler
