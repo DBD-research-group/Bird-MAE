@@ -83,6 +83,9 @@ class EAT(L.LightningModule):
             decoder_kwargs=decoder_kwargs,
         )
 
+        self.student.compile(mode="reduce-overhead")
+        #self.student.compile(mode="default")
+
         # build teacher model
         self.teacher = EAT_Teacher(
             input_shape=(cfg_encoder.input_shape_t, cfg_encoder.input_shape_f),
@@ -103,6 +106,9 @@ class EAT(L.LightningModule):
             layer_norm_targets=cfg_teacher.layer_norm_targets,
             instance_norm_targets=cfg_teacher.instance_norm_targets,
         )
+
+        self.teacher.compile(mode="reduce-overhead")
+        #self.teacher.compile(mode="default")
 
         self.teacher.encoder.load_state_dict(self.student.encoder.state_dict())
         self.teacher.requires_grad_(False)
