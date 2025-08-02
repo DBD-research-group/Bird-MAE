@@ -14,7 +14,6 @@ import hydra
 from timm.optim.optim_factory import param_groups_weight_decay
 from transformers import get_cosine_schedule_with_warmup
 
-
 class EAT(L.LightningModule):
     def __init__(self, 
                  norm_layer,
@@ -22,13 +21,9 @@ class EAT(L.LightningModule):
                  cfg_encoder,
                  cfg_decoder,
                  cfg_teacher,
-                 cfg_teacher_assistant,
-                 cfg_task,
                  optimizer, 
-                 scheduler,
-                 compile_mode="default",  # None, "default", "reduce-overhead" -> takes more GPU
-                ):
-                    
+                 scheduler
+                 ):
         super().__init__()
         self.save_hyperparameters()
 
@@ -44,10 +39,6 @@ class EAT(L.LightningModule):
         self.cfg_encoder = cfg_encoder
         self.cfg_decoder = cfg_decoder
         self.cfg_teacher = cfg_teacher
-        self.cfg_teacher_assistant = cfg_teacher_assistant
-        self.cfg_task = cfg_task
-
-        self.cls_task_is_clustering = cfg_task.cls_task == 'clustering' 
 
         activation = nn.GELU
 
@@ -73,232 +64,131 @@ class EAT(L.LightningModule):
         else:
             raise ValueError(f"Decoder name {cfg_decoder.name} not supported")
 
-        if cfg_task.cls_task == 'clustering':
-            assert cfg_task.clustering_regularizer in ['centering', 'sinkhornknopp', 'gini']            
-            self.dino_loss = DINOLoss(cfg_task.num_clusters)  # num_clusters = 65536
-            dinohead_kwargs = {'out_dim': cfg_task.num_clusters, 'use_bn': False, 'nlayers': 3, 'hidden_dim': 2048, 'bottleneck_dim': 256, 'mlp_bias': True}
-        elif cfg_task.cls_task == 'regression':
-            self.dino_loss = dinohead_kwargs = None
-        else:
-            raise ValueError(f"CLS task {cfg_task.cls_task} is not supported")
-    
-        if cfg_task.feature_regularizer is not None:  # assert feature_regularizer in ['koleo', 'var']
-            if cfg_task.feature_regularizer == 'var':
-                self.feature_regularizer_fn = var_loss
-            elif cfg_task.feature_regularizer == 'koleo':
-                self.feature_regularizer_fn = KoLeoLoss()
-            else:
-                raise ValueError(f"Feature regularizer {cfg_task.feature_regularizer} is not supported")
-    
+
         # build student model
-        self.student = EAT_Student(input_shape=(cfg_encoder.input_shape_t, cfg_encoder.input_shape_f),
-                                   patch_size=(cfg_encoder.patch_size, cfg_encoder.patch_size),
-                                   embed_dim=cfg_encoder.embed_dim,
-                                   depth=cfg_encoder.depth,
-                                   num_heads=cfg_encoder.num_heads,
-                                   mlp_ratio=cfg_encoder.mlp_ratio,
-                                   qkv_bias=cfg_encoder.qkv_bias,
-                                   drop=cfg_encoder.drop,
-                                   drop_path_rate=cfg_encoder.drop_path_rate,
-                                   pos_trainable=cfg_encoder.pos_trainable,
-                                   clone_size=cfg_encoder.clone_size, 
-                                   mask_mode=cfg_encoder.mask_mode, 
-                                   cls_task=cfg_task.cls_task,
-                                   dinohead_kwargs=dinohead_kwargs,
-                                   decoder_cls=decoder_cls,
-                                   decoder_kwargs=decoder_kwargs,
-                                  )
-        
+        self.student = EAT_Student( 
+            input_shape=(cfg_encoder.input_shape_t, cfg_encoder.input_shape_f),
+            patch_size=(cfg_encoder.patch_size, cfg_encoder.patch_size),
+            embed_dim=cfg_encoder.embed_dim,
+            depth=cfg_encoder.depth,
+            num_heads=cfg_encoder.num_heads,
+            mlp_ratio=cfg_encoder.mlp_ratio,
+            qkv_bias=cfg_encoder.qkv_bias,
+            drop=cfg_encoder.drop,
+            drop_path_rate=cfg_encoder.drop_path_rate,
+            pos_trainable=cfg_encoder.pos_trainable,
+            clone_size=cfg_encoder.clone_size,
+            mask_mode=cfg_encoder.mask_mode,
+            decoder_cls=decoder_cls,
+            decoder_kwargs=decoder_kwargs,
+        )
+
+        self.student.compile(mode="reduce-overhead")
+        #self.student.compile(mode="default")
+
         # build teacher model
-        self.teacher = EAT_Teacher(input_shape=(cfg_encoder.input_shape_t, cfg_encoder.input_shape_f),
-                                   patch_size=(cfg_encoder.patch_size, cfg_encoder.patch_size),
-                                   embed_dim=cfg_encoder.embed_dim,
-                                   depth=cfg_encoder.depth,
-                                   num_heads=cfg_encoder.num_heads,
-                                   mlp_ratio=cfg_encoder.mlp_ratio,
-                                   qkv_bias=cfg_encoder.qkv_bias,
-                                   drop=cfg_encoder.drop,
-                                   drop_path_rate=cfg_encoder.drop_path_rate,
-                                   pos_trainable=cfg_encoder.pos_trainable,
-                                   clone_size=cfg_encoder.clone_size,
-                                   cls_task=cfg_task.cls_task,
-                                   dinohead_kwargs=dinohead_kwargs,
-                                   average_top_k_layers=cfg_teacher.average_top_k_layers,
-                                   instance_norm_target_layer=cfg_teacher.instance_norm_target_layer,
-                                   batch_norm_target_layer=cfg_teacher.batch_norm_target_layer,
-                                   layer_norm_target_layer=cfg_teacher.layer_norm_target_layer,
-                                   layer_norm_targets=cfg_teacher.layer_norm_targets,
-                                   instance_norm_targets=cfg_teacher.instance_norm_targets,
-                                  )
-        
+        self.teacher = EAT_Teacher(
+            input_shape=(cfg_encoder.input_shape_t, cfg_encoder.input_shape_f),
+            patch_size=(cfg_encoder.patch_size, cfg_encoder.patch_size),
+            embed_dim=cfg_encoder.embed_dim,
+            depth=cfg_encoder.depth,
+            num_heads=cfg_encoder.num_heads,
+            mlp_ratio=cfg_encoder.mlp_ratio,
+            qkv_bias=cfg_encoder.qkv_bias,
+            drop=cfg_encoder.drop,
+            drop_path_rate=cfg_encoder.drop_path_rate,
+            pos_trainable=cfg_encoder.pos_trainable,
+            clone_size=cfg_encoder.clone_size,
+            average_top_k_layers=cfg_teacher.average_top_k_layers,
+            instance_norm_target_layer=cfg_teacher.instance_norm_target_layer,
+            batch_norm_target_layer=cfg_teacher.batch_norm_target_layer,
+            layer_norm_target_layer=cfg_teacher.layer_norm_target_layer,
+            layer_norm_targets=cfg_teacher.layer_norm_targets,
+            instance_norm_targets=cfg_teacher.instance_norm_targets,
+        )
+
+        self.teacher.compile(mode="reduce-overhead")
+        #self.teacher.compile(mode="default")
+
         self.teacher.encoder.load_state_dict(self.student.encoder.state_dict())
-        if self.cls_task_is_clustering:
-            self.teacher.head.load_state_dict(self.student.head.state_dict())
         self.teacher.requires_grad_(False)
-        if self.cls_task_is_clustering and cfg_task.clustering_regularizer == 'gini':
-            self.teacher.head.requires_grad_(True)
         
-        # self.student.compile(mode=compile_mode)
-        # self.teacher.compile(mode=compile_mode)
-        
-        if cfg_task.use_teacher_assistant:
-            self.teacher_assistant = EAT_Teacher(input_shape=(cfg_teacher_assistant.input_shape_t, cfg_teacher_assistant.input_shape_f),
-                                                 patch_size=(cfg_teacher_assistant.patch_size, cfg_teacher_assistant.patch_size),
-                                                 embed_dim=cfg_teacher_assistant.embed_dim,
-                                                 depth=cfg_teacher_assistant.depth,
-                                                 num_heads=cfg_teacher_assistant.num_heads,
-                                                 mlp_ratio=cfg_teacher_assistant.mlp_ratio,
-                                                 qkv_bias=cfg_teacher_assistant.qkv_bias,
-                                                 drop=cfg_teacher_assistant.drop,
-                                                 drop_path_rate=cfg_teacher_assistant.drop_path_rate,
-                                                 pos_trainable=False,
-                                                 clone_size=cfg_encoder.clone_size,
-                                                 cls_task='regression',
-                                                 dinohead_kwargs=None,
-                                                 average_top_k_layers=cfg_teacher.average_top_k_layers,
-                                                 instance_norm_target_layer=cfg_teacher.instance_norm_target_layer,
-                                                 batch_norm_target_layer=cfg_teacher.batch_norm_target_layer,
-                                                 layer_norm_target_layer=cfg_teacher.layer_norm_target_layer,
-                                                 layer_norm_targets=cfg_teacher.layer_norm_targets,
-                                                 instance_norm_targets=cfg_teacher.instance_norm_targets,
-                                                )
-            self.teacher_assistant.encoder = load_eat_audioset_pretrained_state(self.teacher_assistant.encoder, audioset_eat_state_path=cfg_teacher_assistant.audioset_state_path)
-            self.teacher_assistant.requires_grad_(False)
-            self.teacher_assistant.compile(mode=compile_mode)
-        else:
-            self.teacher_assistant = None
-    
         self.ema_scheduler = None
-        self.sigmoid_scheduler = None
         self.training_step_count = 0 
-    
+
     def forward(self, x, mask_ratio=None):
-        """
-        args:
-            x - mel-spectrogram of shape (batch, channels=1, time=512, freq=128)
-            mask_ratio - masking percentage in range (0, 1)
-        """
-        
+
+        #x: (batch, channels, time, freq)
+        #x: (batch, 1, 512, 128)
+
         self.student.train()
         self.teacher.eval()
-        if self.cfg_task.clustering_regularizer == "gini":
-            self.teacher.head.train()
-        if self.teacher_assistant is not None:
-            self.teacher_assistant.eval()
 
         if mask_ratio is None:
             mask_ratio = self.mask_ratio 
-
-        cache = {}
         
-        # student output shapes: (B=batch_size*clone_size, D=768), (B, L=256, D), (B, L)
-        cache['student_cls_tokens'], cache['student_patch_tokens'], cache['mask'] = self.student(x, mask_ratio)
+        # student forward
+        # cls_pred: (B*clone_size, D=768)
+        # patch_pred: (B*clone_size, L=256, D)
+        # mask: (B*clone_size, L=256)
+        cls_pred, patch_pred, mask = self.student(x, mask_ratio)
 
-        # ALWAYS get teacher outputs (needed for both clustering and regression)
+        # teacher forward
+        # patch_target: (B*clone_size, L=256, D)
         with torch.no_grad():
-            teacher_cls_tokens, cache['teacher_patch_tokens'] = self.teacher(x)
-            if self.teacher_assistant is not None:
-                _, cache['assistant_patch_tokens'] = self.teacher_assistant(x)
+            patch_target = self.teacher(x)
         
-        # Only do clustering-specific processing if clustering task
-        if self.cls_task_is_clustering:
-            cache['student_cls_tokens_after_head'] = self.student.head(cache['student_cls_tokens'])
-            cache['teacher_cls_tokens_after_head'] = self.teacher.head(teacher_cls_tokens)
-        
-        return cache
-    
+        return cls_pred, patch_pred, mask, patch_target
+
     def training_step(self, batch, batch_idx):
         audio = batch["audio"]
 
         # forward
-        cache = self(audio, self.mask_ratio)
-        
-        mask = cache['mask'].float()  # masked patches are 1 and visible ones are 0 (in student input)
-        student_cls_tokens = cache['student_cls_tokens'].float()  # cls token from last student layer
-        student_patch_tokens = cache['student_patch_tokens'].float()  # other token from last student layer
-        teacher_patch_tokens = cache['teacher_patch_tokens'].float()  # average of tokens across layers without cls
+        cls_pred, patch_pred, mask, patch_target = self(audio, self.mask_ratio)
 
-        if self.cls_task_is_clustering:  # this is for clustering (DINO)
-            teacher_cls_tokens_after_head = cache['teacher_cls_tokens_after_head'].float()  # B, C
-            student_cls_tokens_after_head = cache['student_cls_tokens_after_head'].float()  # B, C
-        else:  # the usual EAT cls loss, overwrite it with the mean of patch tokens
-            teacher_cls_tokens = teacher_patch_tokens.mean(dim=1)  # B, D
+        cls_pred = cls_pred.float()
+        patch_pred = patch_pred.float() 
+        mask = mask.float()
+        patch_target = patch_target.float()
 
-        # we only use the teacher assistant for regression tasks of EAT
-        if self.teacher_assistant is not None:
-            assistant_patch_tokens = cache['assistant_patch_tokens'].float()  # B, L, D
-            alpha = self.sigmoid_scheduler.step()  # alpha gradually goes from ~0 -> 1
-            teacher_patch_tokens = alpha * teacher_patch_tokens + (1. - alpha) * assistant_patch_tokens
-            if not self.cls_task_is_clustering:  # usual EAT loss for the cls
-                assistant_cls_tokens = assistant_patch_tokens.mean(dim=1)  # B, D
-                teacher_cls_tokens = alpha * teacher_cls_tokens + (1. - alpha) * assistant_cls_tokens
+        # compute targets for cls loss
+        cls_target = patch_target.mean(dim=1)
 
-        total_loss, loss_dict = 0, {}
-        
-        # EAT local loss (maked patch reconstruction in latent space); it is similar to iBOT
-        patch_loss = masked_reconstruction_loss(student_patch_tokens, teacher_patch_tokens, mask)
-        total_loss += patch_loss
-        loss_dict['train_patch_loss'] = patch_loss  #.clone().detach().cpu().item()
-        
-        if self.cls_task_is_clustering: # Dino clustering Loss
-            
-            if self.cfg_task.clustering_regularizer == "centering":
-                teacher_cls_tokens_probs = self.dino_loss.softmax_center_teacher(teacher_cls_tokens_after_head, teacher_temp=0.07)
-                self.dino_loss.update_center(teacher_cls_tokens_after_head)
-            
-            elif self.cfg_task.clustering_regularizer == "sinkhornknopp":
-                teacher_cls_tokens_probs = self.dino_loss.sinkhorn_knopp_teacher(teacher_cls_tokens_after_head, teacher_temp=0.07)
-            
-            elif self.cfg_task.clustering_regularizer == "gini":
-                teacher_cls_tokens_probs = F.softmax(teacher_cls_tokens_after_head, dim=1)
-                # maximize impurity for uniform cluster assignment to prevent collaps
-                gini = self.dino_loss.gini_impurity(teacher_cls_tokens_probs)
-                total_loss -= gini
-                loss_dict['gini'] = gini  #.clone().detach().cpu().item()
-            
-            else:
-                raise ValueError('clustering regularizer should be one of [centering, sinkhornknopp, gini].')
-            
-            student_temp = 1 if self.cfg_task.clustering_regularizer == 'gini' else None
-            cls_loss = self.dino_loss.forward(student_cls_tokens_after_head, teacher_cls_tokens_probs, student_temp)
-        
-        else:  # EAT regression loss
-            cls_loss = torch.mean((student_cls_tokens - teacher_cls_tokens) ** 2.)
+        # compute losses
+        patch_loss = masked_reconstruction_loss(patch_pred, patch_target, mask)
+        cls_loss = torch.mean((cls_pred-cls_target)**2.)
+        total_loss = patch_loss + cls_loss
 
-        total_loss += cls_loss
-        loss_dict['train_cls_loss'] = cls_loss  #.clone().detach().cpu().item()
-        
-        # latent space diversity regularizer
-        if self.feature_regularizer_fn is not None:
-            cls_diversity_loss = self.feature_regularizer_fn(student_cls_tokens)
-            total_loss += cls_diversity_loss
-            loss_dict['train_cls_diversity_loss'] = cls_diversity_loss.clone().detach().cpu().item()
-            if self.cfg_task.regularize_patch_tokens:
-                patch_diversity_loss = self.feature_regularizer_fn(student_patch_tokens.flatten(0, 1))  # (B, L, D).flatten(0, 1) -> (B*L, D)
-                total_loss += patch_diversity_loss
-                loss_dict['train_patch_diversity_loss'] = patch_diversity_loss  #.clone().detach().cpu().item()
+        batch_size = audio.shape[0]*self.student.clone_size
 
-        loss_dict['train_loss'] = total_loss  #.clone().detach().cpu().item()
-        
-        # batch_size = audio.shape[0] * self.student.clone_size  
-        self.log_dict(loss_dict, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True, rank_zero_only=True, batch_size=audio.size(0))
+        self.log_dict(
+            {
+                "train_loss":       total_loss,
+                "train_patch_loss": patch_loss,
+                "train_cls_loss":   cls_loss,
+            },
+            on_step=True,              # 
+            on_epoch=True,             # 
+            prog_bar=True,
+            sync_dist=True,            # all‑reduce before logging
+            rank_zero_only=True,       # only the main process writes
+            batch_size=audio.size(0),
+        )
+
         self.training_step_count += 1
-        
+
         return total_loss
-            
+    
     def on_before_optimizer_step(self, optimizer):
         torch.nn.utils.clip_grad_norm_(self.student.parameters(), self.clip_norm)
-        if self.cls_task_is_clustering and self.cfg_task.clustering_regularizer == 'gini':
-            torch.nn.utils.clip_grad_norm_(self.teacher.head.parameters(), self.clip_norm)
 
         # EMA update teacher
         if self.ema_scheduler is not None:
             decay = self.ema_scheduler.step()
         else: 
             decay = 0.999
-        ema_update(self.teacher.encoder, self.student.encoder, decay=decay)
-        if self.cls_task_is_clustering and self.cfg_task.clustering_regularizer != 'gini':
-            ema_update(self.teacher.head, self.student.head, decay=decay)
+        
+        ema_update(self.teacher, self.student.encoder, decay=decay)
 
     def validation_step(self, batch, batch_idx):
         pass
@@ -314,12 +204,16 @@ class EAT(L.LightningModule):
             scaled_lr = base_lr * eff_batch / 768 # 768 = 12*16*4
             self.optimizer_cfg["lr"] = scaled_lr        
 
-        param_groups = param_groups_weight_decay(self.student, self.optimizer_cfg["weight_decay"], no_weight_decay_list=("bias", "bn", "ln", "gn", "norm"))
+        param_groups = param_groups_weight_decay(
+            self.student, 
+            self.optimizer_cfg["weight_decay"],
+            no_weight_decay_list=("bias", "bn", "ln", "gn", "norm")
+        )
 
-        if self.cfg_task.cls_task == 'clustering' and self.cfg_task.clustering_regularizer == 'gini':
-            param_groups += param_groups_weight_decay(self.teacher.head, self.optimizer_cfg["weight_decay"], no_weight_decay_list=("bias", "bn", "ln", "gn", "norm"))
-            
-        optimizer = torch.optim.AdamW(param_groups, lr=self.optimizer_cfg["lr"], betas=self.optimizer_cfg["betas"])
+        optimizer = torch.optim.AdamW(
+            param_groups, 
+            lr=self.optimizer_cfg["lr"], 
+            betas=self.optimizer_cfg["betas"])
 
         num_training_steps = self.trainer.estimated_stepping_batches
 
@@ -328,27 +222,31 @@ class EAT(L.LightningModule):
             steps_per_epoch = num_training_steps // self.trainer.max_epochs
             epochs_for_ema = self.trainer.max_epochs // 4 
             ema_max_iter = int(steps_per_epoch * epochs_for_ema)
-            self.ema_scheduler = EMA_Weight_Decay_Scheduler(decay_start=0.9998, decay_end=0.99999, max_iter=ema_max_iter)
-        
-        if self.cfg_task.use_teacher_assistant:
-            steps_per_epoch = num_training_steps // self.trainer.max_epochs
-            epochs_for_ta = self.trainer.max_epochs // 1
-            ta_max_iter = int(steps_per_epoch * epochs_for_ta)
-            self.sigmoid_scheduler = Sigmoid_Rampup_Scheduler(max_iter=ta_max_iter) 
-            
+            self.ema_scheduler = EMA_Weight_Decay_Scheduler(
+                decay_start=0.9998,
+                decay_end=0.99999,
+                max_iter=ema_max_iter)
+
         if self.scheduler_cfg:
             if self.scheduler_cfg.get('use_custom_scheduler', False):
                 raise NotImplementedError("Custom scheduler not implemented yet")
             else:
                 warmup_ratio = 0.125
                 num_warmup_steps = int(num_training_steps * warmup_ratio)
-                scheduler = get_cosine_schedule_with_warmup(optimizer=optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=num_training_steps)
-                scheduler_dict = {"scheduler": scheduler, "interval": "step", "frequency": 1}
+                scheduler = get_cosine_schedule_with_warmup(
+                    optimizer=optimizer,
+                    num_warmup_steps=num_warmup_steps,
+                    num_training_steps=num_training_steps
+                )
+                scheduler_dict = {
+                    "scheduler": scheduler,
+                    "interval": "step",
+                    "frequency": 1
+                }
                 return {"optimizer": optimizer, "lr_scheduler": scheduler_dict}
         else:
             return {"optimizer": optimizer}
-
-
+           
 # Decoder
 class Conv2dLayerNorm(nn.Module):
     def __init__(self, in_c, out_c, kernel_size, stride=1, padding='same', groups=1, activation=nn.GELU, add_residual=True):
@@ -420,7 +318,7 @@ class MLP_LSTM_Block(nn.Module):
         return out
 
 class MLP_LSTM_Decoder(nn.Module):
-    def __init__(self, dim=768, drop=0., activation=nn.GELU, bidirectional=True, add_residual=True, num_layers=2, **kwargs):
+    def __init__(self, dim=768, drop=0., activation=nn.GELU, bidirectional=True, add_residual=True, num_layers=3, **kwargs):
         super().__init__()
         self.blocks = nn.Sequential(*[MLP_LSTM_Block(dim, drop, activation, bidirectional, add_residual) for _ in range(num_layers)])
         self.mask_token = nn.Parameter(torch.randn(1, 1, dim) * 0.02)
@@ -489,6 +387,15 @@ class Mlp(nn.Module):
         x = self.drop2(x)
         return x
 
+class FeedForward(nn.Module):
+
+    def __init__(self, in_dim, hid_dim, dropout=0.):
+        super().__init__()
+        self.ffn = nn.Sequential(nn.Linear(in_dim, hid_dim), nn.GELU(), nn.Dropout(dropout), nn.Linear(hid_dim, in_dim), nn.Dropout(dropout))
+
+    def forward(self, x):
+        return self.ffn(x)
+
 class Attention(nn.Module):
     def __init__(self, dim, num_heads=8, qkv_bias=False, qk_norm=False, scale_norm=False, proj_bias=True, attn_drop=0., proj_drop=0., norm_layer=nn.LayerNorm):
         """
@@ -535,6 +442,7 @@ class Attention(nn.Module):
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
+        
 
 class AltBlock(nn.Module):
     def __init__(self, dim, num_heads, mlp_ratio=4.0, qkv_bias=False, drop=0.0, attn_drop=0.0, drop_path=0.0, act_layer=nn.GELU, norm_layer=nn.LayerNorm, layer_norm_first=False, ffn_targets=True):
@@ -567,6 +475,36 @@ class AltBlock(nn.Module):
                 t = x
             return x, t
 
+class EncoderBlock(nn.Module):
+
+    def __init__(self, in_dim, num_heads, expand_ratio=4., qkv_bias=True, dropout=0, drop_path=0, norm_layer=nn.LayerNorm, layer_norm_first=False, ffn_targets=True):
+        super().__init__()
+        self.layer_norm_first = layer_norm_first
+        self.ffn_targets = ffn_targets
+        self.attn = Attention(in_dim, num_heads, qkv_bias)
+        self.ff = FeedForward(in_dim, int(in_dim * expand_ratio), dropout)
+        self.ln1 = norm_layer(in_dim)
+        self.ln2 = norm_layer(in_dim)
+        self.drop_path1 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.drop_path2 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+
+    def forward(self, x):
+        if self.layer_norm_first:
+            x = x + self.drop_path1(self.attn(self.ln1(x)))
+            t = self.ff(self.ln2(x))
+            x = x + self.drop_path2(t)
+            if not self.ffn_targets:
+                t = x
+        else:
+            x = x + self.drop_path1(self.attn(x))
+            r = self.ln1(x)
+            x = self.ff(r)
+            t = x
+            x = self.ln2(r + self.drop_path2(x))
+            if not self.ffn_targets:
+                t = x
+        return x, t
+
 class PatchEmbed(nn.Module):
 
     def __init__(self, img_size=(512, 128), patch_size=(16, 16), in_chans=1, emb_dim=768):
@@ -583,8 +521,24 @@ class PatchEmbed(nn.Module):
         x = x.transpose(1, 2) # B, 768, 256 -> B, 256, 768
         return x
 
-class ViT_MaskedEncoder(nn.Module):
-    def __init__(self, input_shape=(512, 128), patch_size=(16, 16), embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True, drop=0., attn_drop=0., drop_path_rate=0., pos_trainable=False, clone_size=16, mode='student', mask_mode='inv'):
+class ViT_MaskedEncoder(nn.Module): #eaT_encoder before
+    def __init__(
+        self, 
+        input_shape=(512, 128), 
+        patch_size=(16, 16), 
+        embed_dim=768, 
+        depth=12, 
+        num_heads=12, 
+        mlp_ratio=4, 
+        qkv_bias=True, 
+        drop=0., 
+        attn_drop=0., 
+        drop_path_rate=0., 
+        pos_trainable=False, 
+        clone_size=16, 
+        mode='student', 
+        mask_mode='inv'):
+
         super().__init__()
         
         assert mode in ['student', 'teacher']
@@ -710,7 +664,7 @@ class ViT_MaskedEncoder(nn.Module):
         B *= self.clone_size
         
         len_keep = int(L * (1 - mask_ratio))    
-        noise = torch.rand(B, L, device=x.device)  # noise in [0, 1]
+        noise = torch.rand(B, L)  # noise in [0, 1]
         
         # sort noise for each sample
         ids_shuffle = noise.argsort(dim=1)  # ascend: small is keep, large is remove
@@ -755,10 +709,10 @@ class ViT_MaskedEncoder(nn.Module):
         x = self.norm(x)
 
         # separate cls from the rest
-        cls_tokens = x[:, 0]
-        patch_tokens = x[:, 1:]
+        cls_pred = x[:, 0]
+        patch_pred = x[:, 1:]
         
-        return cls_tokens, patch_tokens, mask, ids_restore
+        return cls_pred, patch_pred, mask, ids_restore
 
     def teacher_forward(self, x, mask_ratio=None):
         x = self.patch_embed(x)  # B, C=1, T=512, F=128 -> B, L=256, D=768
@@ -769,12 +723,10 @@ class ViT_MaskedEncoder(nn.Module):
         for blk in self.blocks:
             x, t = blk(x)
             features.append(t[:, 1:, :].clone())
-        cls_tokens = t[:, 0]  # last layer cls token
-        return cls_tokens, features
+        return features
        
     def forward(self, x, mask_ratio=None): 
         return self.forward_fn(x, mask_ratio)
-
 
 # Student model for EAT
 class EAT_Student(nn.Module):
@@ -787,32 +739,39 @@ class EAT_Student(nn.Module):
                  num_heads=12,
                  mlp_ratio=4,
                  qkv_bias=True,
-                 drop=0.,
-                 attn_drop=0.,
+                 drop=0,
+                 attn_drop=0,
                  drop_path_rate=0,
                  pos_trainable=False,
                  clone_size=16,
                  mask_mode='inv',
-                 cls_task='regression',
-                 dinohead_kwargs={'out_dim': 65536, 'use_bn': False, 'nlayers': 3, 'hidden_dim': 2048, 'bottleneck_dim': 256, 'mlp_bias': True},
                  decoder_cls=CNN2dDecoder,
                  decoder_kwargs={'kernel_size': 3, 'stride': 1, 'padding': 'same', 'groups': 16, 'activation': nn.GELU, 'add_residual': True, 'num_layers': 6},
                 ):
         
         super().__init__()
-        assert cls_task in ['regression', 'clustering']
-        self.cls_task = cls_task
-        self.clone_size = clone_size
-        self.encoder = ViT_MaskedEncoder(input_shape, patch_size, embed_dim, depth, num_heads, mlp_ratio, qkv_bias, drop, attn_drop, drop_path_rate, pos_trainable, clone_size, mode='student', mask_mode=mask_mode)
-        if cls_task == 'clustering':
-            dinohead_kwargs['in_dim'] = embed_dim
-            self.head = DINOHead(**dinohead_kwargs)
-        decoder_kwargs['num_freq_patches'] = self.encoder.patch_embed.patch_ft[0]
-        decoder_kwargs['num_time_patches'] = self.encoder.patch_embed.patch_ft[1]
-        decoder_kwargs['dim'] = embed_dim
-        self.decoder = decoder_cls(**decoder_kwargs)
-        self.initialize_weights()
+
+        # student encoder & decoder
+        self.encoder = ViT_MaskedEncoder(
+                input_shape=input_shape, 
+                patch_size=patch_size, 
+                embed_dim=embed_dim, 
+                depth=depth, 
+                attn_drop=attn_drop,
+                num_heads=num_heads, 
+                mlp_ratio=mlp_ratio, 
+                qkv_bias=qkv_bias, 
+                drop=drop, 
+                drop_path_rate=drop_path_rate, 
+                pos_trainable=pos_trainable, 
+                clone_size=clone_size, 
+                mode='student', 
+                mask_mode=mask_mode)
         
+        num_freq_patches, num_time_patches = self.encoder.patch_embed.patch_ft
+        self.decoder = decoder_cls(embed_dim, num_freq_patches=num_freq_patches, num_time_patches=num_time_patches, **decoder_kwargs)
+        self.initialize_weights()
+        self.clone_size = clone_size
         
     def initialize_weights(self):
         pos_embed = get_2d_sincos_pos_embed_flexible(self.encoder.pos_embed.shape[-1], self.encoder.patch_embed.patch_ft, cls_token=True)
@@ -832,21 +791,21 @@ class EAT_Student(nn.Module):
             # nn.init.constant_(m.bias, 0)
             # nn.init.constant_(m.weight, 1.0)
     
+    
     def forward(self, x, mask_ratio=0.8):
         """
         args:
             x - input mel-spectrogram of shape B, 1, T, F 
         """
-        cls_tokens, patch_tokens, mask, ids_restore = self.encoder(x, mask_ratio)
-        patch_tokens = self.decoder(patch_tokens, ids_restore)
-        return cls_tokens, patch_tokens, mask
+        cls_pred, patch_pred, mask, ids_restore = self.encoder(x, mask_ratio)
+        patch_pred = self.decoder(patch_pred, ids_restore)
+        return cls_pred, patch_pred, mask
 
-    
 # Teacher model for EAT
 class EAT_Teacher(nn.Module):
     
     def __init__(self,
-                 input_shape=(512, 128),
+                 input_shape=(512, 128), 
                  patch_size=(16, 16),
                  embed_dim=768,
                  depth=12,
@@ -854,12 +813,10 @@ class EAT_Teacher(nn.Module):
                  mlp_ratio=4,
                  qkv_bias=True,
                  drop=0,
-                 attn_drop=0.,
+                 attn_drop=0,
                  drop_path_rate=0,
                  pos_trainable=False,
                  clone_size=16,
-                 cls_task='regression',
-                 dinohead_kwargs={'out_dim': 65536, 'use_bn': False, 'nlayers': 3, 'hidden_dim': 2048, 'bottleneck_dim': 256, 'mlp_bias': True},
                  average_top_k_layers=12,
                  instance_norm_target_layer=True,  # based on EAT config
                  batch_norm_target_layer=False,  # based on EAT config
@@ -869,13 +826,23 @@ class EAT_Teacher(nn.Module):
                 ):
         
         super().__init__()
-        assert cls_task in ['regression', 'clustering']
-        self.cls_task = cls_task
+
+        self.encoder = ViT_MaskedEncoder(
+            input_shape=input_shape, 
+            patch_size=patch_size, 
+            embed_dim=embed_dim, 
+            depth=depth, 
+            num_heads=num_heads, 
+            mlp_ratio=mlp_ratio, 
+            qkv_bias=qkv_bias, 
+            drop=drop, 
+            attn_drop=attn_drop,
+            drop_path_rate=drop_path_rate, 
+            pos_trainable=pos_trainable, 
+            clone_size=clone_size, 
+            mode='teacher')
+        
         self.clone_size = clone_size
-        self.encoder = ViT_MaskedEncoder(input_shape, patch_size, embed_dim, depth, num_heads, mlp_ratio, qkv_bias, drop, attn_drop, drop_path_rate, pos_trainable, clone_size, mode='teacher')
-        if cls_task == 'clustering':
-            dinohead_kwargs['in_dim'] = embed_dim
-            self.head = DINOHead(**dinohead_kwargs)
         self.average_top_k_layers = average_top_k_layers
         self.instance_norm_target_layer = instance_norm_target_layer
         self.batch_norm_target_layer = batch_norm_target_layer
@@ -911,164 +878,10 @@ class EAT_Teacher(nn.Module):
         args:
             x - input mel-spectrogram of shape B, 1, T, F 
         """
-        cls_tokens, patch_tokens = self.encoder(x, 0)  # outputs final cls_token and a list of all transformer layers' embeddings (e.g., 12 layer in base vit)
-        patch_tokens = self.make_targets(patch_tokens)
-        patch_tokens = patch_tokens.repeat_interleave(self.clone_size, dim=0)
-        cls_tokens = cls_tokens.repeat_interleave(self.clone_size, dim=0)
-        return cls_tokens, patch_tokens
-
-
-# Clustering Modules
-class DINOHead(nn.Module):
-    def __init__(self, in_dim, out_dim, use_bn=False, nlayers=3, hidden_dim=2048, bottleneck_dim=256, mlp_bias=True):
-        super().__init__()
-        nlayers = max(nlayers, 1)
-        self.mlp = self._build_mlp(nlayers, in_dim, bottleneck_dim, hidden_dim=hidden_dim, use_bn=use_bn, bias=mlp_bias)
-        self.apply(self._init_weights)
-        # I do not know if doing this is necessary or not, they did it, so let's keep it.
-        self.last_layer = nn.utils.parametrizations.weight_norm(nn.Linear(bottleneck_dim, out_dim, bias=False))
-        self.last_layer.parametrizations.weight.original0.data.fill_(1)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            nn.init.trunc_normal_(m.weight, std=0.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-
-    def forward(self, x):
-        x = self.mlp(x)
-        # eps = 1e-6 if x.dtype == torch.float16 else 1e-12
-        x = nn.functional.normalize(x, dim=-1, p=2, eps=1e-8)
-        x = self.last_layer(x)
-        return x
-
-    def _build_mlp(self, nlayers, in_dim, bottleneck_dim, hidden_dim=None, use_bn=False, bias=True):
-        if nlayers == 1:
-            return nn.Linear(in_dim, bottleneck_dim, bias=bias)
-        else:
-            layers = [nn.Linear(in_dim, hidden_dim, bias=bias)]
-            if use_bn:
-                layers.append(nn.BatchNorm1d(hidden_dim))
-            layers.append(nn.GELU())
-            for _ in range(nlayers - 2):
-                layers.append(nn.Linear(hidden_dim, hidden_dim, bias=bias))
-                if use_bn:
-                    layers.append(nn.BatchNorm1d(hidden_dim))
-                layers.append(nn.GELU())
-            layers.append(nn.Linear(hidden_dim, bottleneck_dim, bias=bias))
-            return nn.Sequential(*layers)
-
-
-class DINOLoss(nn.Module):
-    def __init__(self, out_dim, student_temp=0.1, center_momentum=0.9):
-        super().__init__()
-        self.student_temp = student_temp
-        self.center_momentum = center_momentum
-        self.register_buffer("center", torch.zeros(1, out_dim))
-        self.updated = True
-        self.len_teacher_output = None
-        self.batch_center = None
-
-    @torch.no_grad()
-    def softmax_center_teacher(self, teacher_output, teacher_temp=0.07):
-        self.apply_center_update()
-        # teacher centering and sharpening
-        return F.softmax((teacher_output - self.center) / teacher_temp, dim=-1)
-
-    @torch.no_grad()
-    def sinkhorn_knopp_teacher(self, teacher_output, teacher_temp=0.07, n_iterations=3):
-        teacher_output = teacher_output.float()
-        Q = torch.exp(teacher_output / teacher_temp).t()  # Q is K-by-B for consistency with notations from our paper
-        B = Q.shape[1]  # number of samples to assign
-        K = Q.shape[0]  # how many prototypes
-
-        # make the matrix sums to 1
-        sum_Q = torch.sum(Q)
-        Q /= sum_Q
-
-        for it in range(n_iterations):
-            # normalize each row: total weight per prototype must be 1/K
-            sum_of_rows = torch.sum(Q, dim=1, keepdim=True)
-            Q /= sum_of_rows
-            Q /= K
-
-            # normalize each column: total weight per sample must be 1/B
-            Q /= torch.sum(Q, dim=0, keepdim=True)
-            Q /= B
-
-        Q *= B  # the columns must sum to 1 so that Q is an assignment
-        return Q.t()
-
-    def gini_impurity(self, p):
-        """
-        p - teacher softmax predictions (B, D)
-        """
-        return (1.0 - (p ** 2).sum(dim=1)).mean()
-
-    def forward(self, student_logits, teacher_probs, student_temp=None):
-        """
-        Cross-entropy between softmax outputs of the teacher and student networks.
-        """
-        if student_temp is None:
-            student_temp = self.student_temp
-        lsm = F.log_softmax(student_logits / student_temp, dim=-1)
-        return -(teacher_probs * lsm).sum(dim=-1).mean()
-
-    @torch.no_grad()
-    def update_center(self, teacher_output):
-        self.updated = False
-        self.len_teacher_output = len(teacher_output)
-        self.batch_center = torch.sum(teacher_output, dim=0, keepdim=True)
-        
-    @torch.no_grad()
-    def apply_center_update(self):
-        if not self.updated:
-            _t = self.batch_center / (self.len_teacher_output)
-            self.center = self.center * self.center_momentum + _t * (1 - self.center_momentum)
-            self.updated = True
-
-
-class KoLeoLoss(nn.Module):
-    """Kozachenko-Leonenko entropic loss regularizer from Sablayrolles et al. - 2018 - Spreading vectors for similarity search"""
-
-    def __init__(self):
-        super().__init__()
-        self.pdist = nn.PairwiseDistance(2, eps=1e-8)
-
-    def pairwise_NNs_inner(self, x):
-        """
-        Pairwise nearest neighbors for L2-normalized vectors.
-        Uses Torch rather than Faiss to remain on GPU.
-        """
-        # parwise dot products (= inverse distance)
-        dots = torch.mm(x, x.t())
-        n = x.shape[0]
-        dots.view(-1)[:: (n + 1)].fill_(-1)  # Trick to fill diagonal with -1
-        # max inner prod -> min distance
-        _, I = torch.max(dots, dim=1)  # noqa: E741
-        return I
-
-    def forward(self, student_output, eps=1e-8):
-        """
-        Args:
-            student_output (BxD): backbone output of student
-        """
-        with torch.autocast(device_type=student_output.device.type, enabled=False): #change
-            student_output = F.normalize(student_output, eps=eps, p=2, dim=-1)
-            I = self.pairwise_NNs_inner(student_output)  # noqa: E741
-            distances = self.pdist(student_output, student_output[I])  # BxD, BxD -> B
-            loss = -torch.log(distances + eps).mean()
-        return loss
-
-
-def var_loss(x):
-    """
-    x - student logits (B, D)
-    """
-    x_centered = x - x.mean(dim=0)
-    s = torch.sqrt(x_centered.var(dim=0) + 0.0001)
-    return F.relu(1. - s).mean()
-  
+        patch_target = self.encoder(x, 0)  # outputs a list of all transformer layers' embeddings (e.g., 12 layer in base vit)
+        patch_target = self.make_targets(patch_target)
+        patch_target = patch_target.repeat_interleave(self.clone_size, dim=0)
+        return patch_target
 
 # Utils
 class RiseRunDecay(torch.optim.lr_scheduler._LRScheduler):
@@ -1093,7 +906,6 @@ class RiseRunDecay(torch.optim.lr_scheduler._LRScheduler):
             factor = 0.5 * (1 + math.cos(math.pi * current_iteration / self.decay_interval))
 
         return [lr * factor if (lr * factor) > self.lowest_lr else self.lowest_lr for lr in self.base_lrs]
-      
 
 class EMA_Weight_Decay_Scheduler:
     def __init__(self, decay_start=0.9998, decay_end=0.99999, max_iter=None):
@@ -1103,21 +915,15 @@ class EMA_Weight_Decay_Scheduler:
         
     def step(self):
         w = self.decays[self.counter]
-        self.counter = min(self.counter + 1, self.max_iter)
+        self.counter += 1
+        self.counter = min(self.counter, self.max_iter)
         return w
         
         
-class Sigmoid_Rampup_Scheduler:
-    def __init__(self, scale=-5.0, max_iter=None):
-        self.scale = scale
-        self.max_iter = max_iter
-        self.counter = 0
-        
-    def step(self):
-        phase_square = (1.0 - self.counter / self.max_iter) ** 2
-        self.counter = min(self.counter + 1, self.max_iter)
-        return math.exp(self.scale * phase_square)
-
+def masked_reconstruction_loss(pred, target, mask):
+    loss = (pred - target) ** 2
+    loss = loss.mean(dim=-1)
+    return (loss * mask).sum() / mask.sum()
 
 @torch.no_grad()
 def ema_update(ema_model, model, buffers=True, decay=.999):
@@ -1130,25 +936,94 @@ def ema_update(ema_model, model, buffers=True, decay=.999):
             else:
                 b_avg.data = decay * b_avg.data + (1. - decay) * b.data
 
+def train_step(student, teacher, optimizer, train_loader, scheduler=None, device='cuda', clip_norm=4., mask_ratio=0.8, ema_scheduler=None):
+    losses = []
+    
+    student.train()
+    teacher.eval()
+    
+    for x in tqdm(train_loader, leave=False):
+        x = x.to(device)  # B=12, 1, T=512, F=128
+        
+        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            cls_pred, patch_pred, mask = student(x, mask_ratio)  # cls_pred: (B*clone_size, D=768), patch_pred: (B*clone_size, L=256, D), mask: (B*clone_size, L=256)
+            with torch.no_grad():
+                patch_target = teacher(x)  # (B*clone_size, L=256, D)
+        
+        cls_pred, patch_pred, mask, patch_target = cls_pred.float(), patch_pred.float(), mask.float(), patch_target.float()  
+        cls_target = patch_target.mean(dim=1)  # B*clone_size, D=768 
+        
+        # local (patch) loss + global (utterance) loss
+        loss = masked_reconstruction_loss(patch_pred, patch_target, mask)
+        loss += torch.mean((cls_pred - cls_target) ** 2.)
+        
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(student.parameters(), clip_norm)
+        optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
+        optimizer.zero_grad()
+        
+        if ema_scheduler is not None:
+            decay = ema_scheduler.step()
+        else:
+            decay = 0.999
+        ema_update(teacher.encoder, student.encoder, decay=decay)
+        
+        losses.append(loss.detach().cpu().item())
+    
+    return np.mean(losses)
 
-def masked_reconstruction_loss(pred, target, mask):
-    loss = (pred - target) ** 2
-    loss = loss.mean(dim=-1)
-    return (loss * mask).sum() / mask.sum()
+# # config
+# epochs = 30
+# device = 'cuda'
+# seed = 42
+# sample_dur = 5
+# patch_size = (16, 16)
+# clone_size = 16
+# mask_mode = 'inv'
+# mask_ratio = 0.8
+# clip_norm= 4.
+# decoder_type = 'cnn2d'  # cnn2d, cnn1d, mlplstm, vit, swin
+# # if decoder_type == 'cnn2d': for ablation, later...
+# #     decoder_cls = LSTM or CNN2D
+# #     decoder_kwargs = {'kernel_size': 3, 'stride': 1, 'padding': 'same', 'groups': 16, 'activation': nn.GELU, 'add_residual': True, 'num_layers': 6}
 
+# experiment_name = f"EAT_{decoder_type}_{patch_size[0]}x{patch_size[1]}_{mask_mode}mask{int(mask_ratio*100)}_{clone_size}clone"
+# print(experiment_name)
 
-def load_eat_audioset_pretrained_state(vit_encoder, audioset_eat_state_path='EAT-base_epoch30_pt.pt'):
-    audioset_state = torch.load(audioset_eat_state_path)
-    model_state = vit_encoder.state_dict()
-    model_state['cls_token'] = audioset_state['model']['modality_encoders.IMAGE.extra_tokens'].clone()
-    model_state['patch_embed.proj.weight'] = audioset_state['model']['modality_encoders.IMAGE.local_encoder.proj.weight'].clone()
-    model_state['patch_embed.proj.bias'] = audioset_state['model']['modality_encoders.IMAGE.local_encoder.proj.bias'].clone()
-    # model_state['pos_embed'] = audioset_state['model']['modality_encoders.IMAGE.fixed_positional_encoder.positions'][:, :257].clone()
-    model_state['norm.weight'] = audioset_state['model']['modality_encoders.IMAGE.context_encoder.norm.weight'].clone()
-    model_state['norm.bias'] = audioset_state['model']['modality_encoders.IMAGE.context_encoder.norm.bias'].clone()
-    for k in audioset_state['model'].keys():
-        if k[:6] == 'blocks':
-            model_state[k] = audioset_state['model'][k].clone()
-    _ = vit_encoder.load_state_dict(model_state, strict=False)
-    print(_)
-    return vit_encoder
+# # saving and monitoring
+# par_dir = Path(f'logs/')
+# Path.mkdir(par_dir, parents=True, exist_ok=True)
+# time_id = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+# history_path = par_dir.joinpath(f'{experiment_name}_{int(sample_dur)}sec_{time_id}_history.csv')
+# state_path = par_dir.joinpath(f'{experiment_name}_{int(sample_dur)}sec_{time_id}_state.pt')
+# print(history_path)
+# print(state_path)
+# history = {'train_loss': []}
+
+# # build models
+# student = EAT_Student().to(device).train()
+# teacher = EAT_Teacher().to(device).eval()
+# teacher.encoder.load_state_dict(student.encoder.state_dict())
+# teacher.requires_grad_(False)
+# student.compile(mode='default')
+# teacher.compile(mode='default')
+# optimizer = torch.optim.AdamW(student.parameters(), lr=0.0005, weight_decay=0.05, betas=[0.9, 0.95])
+# scheduler = RiseRunDecay(optimizer, steps_in_epoch=len(train_loader), warmup=epochs//8, total_epochs=epochs, lowest_lr=1e-6)
+# print(f'#parameters: {sum(p.numel() for p in student.parameters()):_}')
+# print(f'#parameters: {sum(p.numel() for p in teacher.parameters()):_}')
+# ema_scheduler = EMA_Weight_Decay_Scheduler(decay_start=0.9998, decay_end=0.99999, max_iter=len(train_loader)*(epochs//4))
+
+# # run
+# if __name__ == "__main__":
+#     train_loader = None
+#     pbar = tqdm(range(epochs), colour='orange')
+#     for epoch in pbar:
+#         train_loss = train_step(student, teacher, optimizer, train_loader, scheduler, device, clip_norm, mask_ratio, ema_scheduler)
+#         history['train_loss'].append(train_loss)
+#         if epoch in [0, 4, 9, 14, 19, 24, 29]:  # to make plots later for performance at different epochs
+#             torch.save({'encoder': student.encoder.state_dict(), 'ema_encoder': teacher.encoder.state_dict(), 'decoder': student.decoder.state_dict(), 'opt': optimizer.state_dict(), 'epochs': epochs}, state_path.as_posix().split('.pt')[0] + f"_epoch{epoch+1}.pt")
+#         pbar.set_description(f"loss={train_loss:.4f}")
+
+#     _ = pd.DataFrame(history).to_csv(history_path)

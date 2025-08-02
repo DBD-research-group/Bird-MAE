@@ -158,8 +158,11 @@ def build_model(cfg_module: DictConfig):
             cfg_encoder=cfg_module.network.encoder,
             cfg_decoder=cfg_module.network.decoder,
             cfg_teacher=cfg_module.network.teacher,
+            cfg_teacher_assistant=cfg_module.network.teacher_assistant,
+            cfg_task=cfg_module.network.task,
             optimizer=cfg_module.network.optimizer,
             scheduler=cfg_module.scheduler,
+            compile_mode=cfg_module.network.compile_mode,
         )
     
     elif cfg_module.network.name == "VIT_EAT":

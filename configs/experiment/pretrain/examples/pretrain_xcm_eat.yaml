@@ -20,7 +20,7 @@ data:
   loaders:
     train: 
       num_workers: 32
-      batch_size: 24
+      batch_size: 8
       shuffle: true
   dataset:
     test_in_val: false

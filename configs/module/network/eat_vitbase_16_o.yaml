@@ -5,8 +5,8 @@ defaults:
 name: EAT
 sampling_rate: 32_000
 norm_layer: nn.LayerNorm
+
 mask_ratio: 0.8
-compile_mode: "default"
 
 encoder:
   # Input/patch configuration
@@ -34,15 +34,6 @@ encoder:
 #   activation: nn.GELU
 #   add_residual: true
 #   num_layers: 6
-
-task: 
-  cls_task: "regression"
-  feature_regularizer: "koleo"
-  clustering_regularizer: null
-  regularize_patch_tokens: true
-  use_teacher_assistant: false
-
-teacher_assistant: null
 
 teacher:
   average_top_k_layers: 12
