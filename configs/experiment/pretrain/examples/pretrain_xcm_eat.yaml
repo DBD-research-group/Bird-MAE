@@ -16,11 +16,22 @@ seed: 42
 start_time: ${now:%Y-%m-%d_%H%M%S}
 task_name: pretrain_xcm_eat # improve this
 
+module:
+  network:
+    compile_mode: null
+    task: 
+      cls_task: "regression"
+      feature_regularizer: "var"
+      clustering_regularizer: null
+      regularize_patch_tokens: true
+      use_teacher_assistant: false
+      multi_view: true
+
 data:
   loaders:
     train: 
       num_workers: 32
-      batch_size: 8
+      batch_size: 4
       shuffle: true
   dataset:
     test_in_val: false

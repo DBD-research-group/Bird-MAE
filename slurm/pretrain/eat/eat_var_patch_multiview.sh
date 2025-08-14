@@ -1,12 +1,12 @@
 #!/usr/bin/zsh
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
+#SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=16
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:4
 #SBATCH --mem=290gb
 #SBATCH --partition=main
-#SBATCH --job-name=eat_base_xcl_koleo_patched
-#SBATCH --output=/mnt/work/bird2vec/logs/eat/eat_base_koleo_patched.log
+#SBATCH --job-name=eat_base_xcl_var_patched_multiview
+#SBATCH --output=/mnt/work/bird2vec/logs/eat/eat_base_var_patched_multiview.log
 #SBATCH --time=6-15:00:00  
 ###SBATCH --exclude=gpu-v100-3
 #SBATCH --nodelist=gpu-l40s-1
@@ -28,25 +28,25 @@ hostname
 srun python pretrain.py \
         experiment=eat/pretrain_xcl_eat_base.yaml \
         task_name="eat_base_xcl_koleo" \
-        trainer.devices=1 \
+        trainer.devices=4 \
         +trainer.num_nodes=1 \
         trainer.precision=16-mixed \
         trainer.strategy=auto \
         data.transform.waveform_augmentations.mixup_wave.p=0.0 \
         trainer.max_epochs=60 \
-        data.loaders.train.batch_size=32 \
+        data.loaders.train.batch_size=64 \
         data.loaders.train.num_workers=16 \
         data.loaders.train.pin_memory=true \
         +data.loaders.train.prefetch_factor=2 \
         trainer.gradient_clip_val=1.0 \
         module.optimizer.target.lr=5e-4 \
         module.network.task.cls_task="regression" \
-        module.network.task.feature_regularizer="koleo" \
+        module.network.task.feature_regularizer="var" \
         module.network.task.clustering_regularizer=null \
         module.network.task.regularize_patch_tokens=true \
         module.network.task.use_teacher_assistant=false \
-	#ckpt_path=/mnt/work/bird2vec/logs_pretrain_eat/eat_base_xcl_koleo/runs/XCL/EAT/2025-08-06_131415/callback_checkpoints/last.ckpt
-
+        module.network.compile_mode=null \
+        module.network.task.multi_view=true \
         #data.dataset.save_to_disk="/scratch/birdset/XCL/XCL_processed_500_2events_ogg_addsoundscapes-hsn" \
         #trainer.strategy=ddp_find_unused_parameters_true \
         ##ckpt_path="/mnt/work/bird2vec/logs_pretrain_audioset_MAE/pretrain_xcl_large_swin/runs/XCL/AudioMAE/2024-12-12_162203/callback_checkpoints/last.ckpt"
@@ -62,3 +62,4 @@ else
 fi
 
 echo "Finished script."
+

@@ -9,11 +9,11 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from util.pos_embed import get_2d_sincos_pos_embed_flexible
-from .rotary_embedding_torch import RotaryEmbedding
 import lightning as L
 import hydra
 from timm.optim.optim_factory import param_groups_weight_decay
 from transformers import get_cosine_schedule_with_warmup
+
 
 class EAT(L.LightningModule):
     def __init__(self, 
@@ -101,10 +101,8 @@ class EAT(L.LightningModule):
                                    drop=cfg_encoder.drop,
                                    drop_path_rate=cfg_encoder.drop_path_rate,
                                    pos_trainable=cfg_encoder.pos_trainable,
-                                   clone_size=cfg_encoder.clone_size,
-                                   use_rope=cfg_encoder.use_rope,  # rotary positional embedding
+                                   clone_size=cfg_encoder.clone_size, 
                                    mask_mode=cfg_encoder.mask_mode, 
-                                   drop_masked_tokens=cfg_encoder.drop_masked_tokens,  # True is like default EAT
                                    cls_task=cfg_task.cls_task,
                                    dinohead_kwargs=dinohead_kwargs,
                                    decoder_cls=decoder_cls,
@@ -123,7 +121,6 @@ class EAT(L.LightningModule):
                                    drop_path_rate=cfg_encoder.drop_path_rate,
                                    pos_trainable=cfg_encoder.pos_trainable,
                                    clone_size=cfg_encoder.clone_size,
-                                   use_rope=cfg_encoder.use_rope,
                                    cls_task=cfg_task.cls_task,
                                    dinohead_kwargs=dinohead_kwargs,
                                    average_top_k_layers=cfg_teacher.average_top_k_layers,
@@ -142,6 +139,7 @@ class EAT(L.LightningModule):
             self.teacher.head.requires_grad_(True)
 
         if compile_mode is not None:
+            print(f"Compiling student and teacher with mode {compile_mode}")
             self.student.compile(mode=compile_mode)
             self.teacher.compile(mode=compile_mode)
         
@@ -157,7 +155,6 @@ class EAT(L.LightningModule):
                                                  drop_path_rate=cfg_teacher_assistant.drop_path_rate,
                                                  pos_trainable=False,
                                                  clone_size=cfg_encoder.clone_size,
-                                                 use_rope=False,
                                                  cls_task='regression',
                                                  dinohead_kwargs=None,
                                                  average_top_k_layers=cfg_teacher.average_top_k_layers,
@@ -169,15 +166,14 @@ class EAT(L.LightningModule):
                                                 )
             self.teacher_assistant.encoder = load_eat_audioset_pretrained_state(self.teacher_assistant.encoder, audioset_eat_state_path=cfg_teacher_assistant.audioset_state_path)
             self.teacher_assistant.requires_grad_(False)
-            if compile_mode is not None:
-                self.teacher_assistant.compile(mode=compile_mode)
+            self.teacher_assistant.compile(mode=compile_mode)
         else:
             self.teacher_assistant = None
     
         self.ema_scheduler = None
         self.sigmoid_scheduler = None
         self.training_step_count = 0 
-        
+    
     def forward(self, x, mask_ratio=None):
         """
         args:
@@ -197,32 +193,25 @@ class EAT(L.LightningModule):
 
         cache = {}
         
-        # student output shapes: (B=batch_size*clone_size*views, D=768), (B, L=256, D), (B, L)
+        # student output shapes: (B=batch_size*clone_size, D=768), (B, L=256, D), (B, L)
         cache['student_cls_tokens'], cache['student_patch_tokens'], cache['mask'] = self.student(x, mask_ratio)
 
         # ALWAYS get teacher outputs (needed for both clustering and regression)
         with torch.no_grad():
-            teacher_cls_tokens, cache['teacher_patch_tokens'] = self.teacher(x)  # (B, D), (B, L, D)
+            teacher_cls_tokens, cache['teacher_patch_tokens'] = self.teacher(x)
             if self.teacher_assistant is not None:
-                _, cache['assistant_patch_tokens'] = self.teacher_assistant(x)  # _, (B, L, D)
-
+                _, cache['assistant_patch_tokens'] = self.teacher_assistant(x)
+        
         # Only do clustering-specific processing if clustering task
         if self.cls_task_is_clustering:
-            cache['student_cls_tokens_after_head'] = self.student.head(cache['student_cls_tokens'])  # B, C=clusters
-            cache['teacher_cls_tokens_after_head'] = self.teacher.head(teacher_cls_tokens)  # B, C
+            cache['student_cls_tokens_after_head'] = self.student.head(cache['student_cls_tokens'])
+            cache['teacher_cls_tokens_after_head'] = self.teacher.head(teacher_cls_tokens)
         
         return cache
     
     def training_step(self, batch, batch_idx):
         audio = batch["audio"]
-        
-        if self.cfg_task.multi_view:  # create two views
-            b = torch.from_numpy(np.random.beta(10, 10, (audio.shape[0], 1, 1, 1))).to(audio)
-            x1 = b * audio + (1 - b) * audio.flip(0)
-            x2 = (1 - b) * audio + b * audio.flip(0)
-            audio = torch.cat([x1, x2])
-            audio = audio + 0.05 * torch.randn_like(audio)
-            
+
         # forward
         cache = self(audio, self.mask_ratio)
         
@@ -248,10 +237,10 @@ class EAT(L.LightningModule):
 
         total_loss, loss_dict = 0, {}
         
-        # EAT local loss (maked patch reconstruction in latent space); it is similar to iBOT but regression instead of clustering
+        # EAT local loss (maked patch reconstruction in latent space); it is similar to iBOT
         patch_loss = masked_reconstruction_loss(student_patch_tokens, teacher_patch_tokens, mask)
         total_loss += patch_loss
-        loss_dict['train_patch_loss'] = patch_loss
+        loss_dict['train_patch_loss'] = patch_loss  #.clone().detach().cpu().item()
         
         if self.cls_task_is_clustering: # Dino clustering Loss
             
@@ -263,7 +252,7 @@ class EAT(L.LightningModule):
                 teacher_cls_tokens_probs = self.dino_loss.sinkhorn_knopp_teacher(teacher_cls_tokens_after_head, teacher_temp=0.07)
             
             elif self.cfg_task.clustering_regularizer == "gini":
-                teacher_cls_tokens_probs = F.softmax(teacher_cls_tokens_after_head / 0.07, dim=1)
+                teacher_cls_tokens_probs = F.softmax(teacher_cls_tokens_after_head, dim=1)
                 # maximize impurity for uniform cluster assignment to prevent collaps
                 gini = self.dino_loss.gini_impurity(teacher_cls_tokens_probs)
                 total_loss -= gini
@@ -272,33 +261,28 @@ class EAT(L.LightningModule):
             else:
                 raise ValueError('clustering regularizer should be one of [centering, sinkhornknopp, gini].')
             
-            if self.cfg_task.multi_view:  # use cross-view loss
-                t1, t2 = teacher_cls_tokens_probs.chunk(2)
-                teacher_cls_tokens_probs = torch.cat([t2, t1])
-            cls_loss = self.dino_loss.forward(student_cls_tokens_after_head, teacher_cls_tokens_probs)
+            student_temp = 1 if self.cfg_task.clustering_regularizer == 'gini' else None
+            cls_loss = self.dino_loss.forward(student_cls_tokens_after_head, teacher_cls_tokens_probs, student_temp)
         
         else:  # EAT regression loss
-            if self.cfg_task.multi_view:  # use cross-view loss
-                t1, t2 = teacher_cls_tokens.chunk(2)
-                teacher_cls_tokens = torch.cat([t2, t1])
             cls_loss = torch.mean((student_cls_tokens - teacher_cls_tokens) ** 2.)
 
         total_loss += cls_loss
-        loss_dict['train_cls_loss'] = cls_loss
+        loss_dict['train_cls_loss'] = cls_loss  #.clone().detach().cpu().item()
         
         # latent space diversity regularizer
         if self.feature_regularizer_fn is not None:
             cls_diversity_loss = self.feature_regularizer_fn(student_cls_tokens)
             total_loss += cls_diversity_loss
-            loss_dict['train_cls_diversity_loss'] = cls_diversity_loss
+            loss_dict['train_cls_diversity_loss'] = cls_diversity_loss.clone().detach().cpu().item()
             if self.cfg_task.regularize_patch_tokens:
                 patch_diversity_loss = self.feature_regularizer_fn(student_patch_tokens.flatten(0, 1))  # (B, L, D).flatten(0, 1) -> (B*L, D)
                 total_loss += patch_diversity_loss
-                loss_dict['train_patch_diversity_loss'] = patch_diversity_loss
+                loss_dict['train_patch_diversity_loss'] = patch_diversity_loss  #.clone().detach().cpu().item()
 
-        loss_dict['train_loss'] = total_loss
+        loss_dict['train_loss'] = total_loss  #.clone().detach().cpu().item()
         
-        # batch_size = audio.shape[0] * self.student.clone_size
+        # batch_size = audio.shape[0] * self.student.clone_size  
         self.log_dict(loss_dict, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True, rank_zero_only=True, batch_size=audio.size(0))
         self.training_step_count += 1
         
@@ -330,7 +314,8 @@ class EAT(L.LightningModule):
 
             base_lr = self.optimizer_cfg["lr"]            # 0.0005 from paper
             scaled_lr = base_lr * eff_batch / 768 # 768 = 12*16*4
-            self.optimizer_cfg["lr"] = scaled_lr        
+            self.optimizer_cfg["lr"] = scaled_lr    
+            print(f"Scaled LR: {scaled_lr}")    
 
         param_groups = param_groups_weight_decay(self.student, self.optimizer_cfg["weight_decay"], no_weight_decay_list=("bias", "bn", "ln", "gn", "norm"))
 
@@ -388,23 +373,19 @@ class Conv2dLayerNorm(nn.Module):
         return x
 
 class CNN2dDecoder(nn.Module):
-    def __init__(self, dim=768, kernel_size=3, stride=1, padding='same', groups=16, activation=nn.GELU, add_residual=True, num_layers=6, num_freq_patches=8, num_time_patches=32, drop_masked_tokens=True):
+    def __init__(self, dim=768, kernel_size=3, stride=1, padding='same', groups=16, activation=nn.GELU, add_residual=True, num_layers=6, num_freq_patches=8, num_time_patches=32):
         super().__init__()
         self.blocks = nn.Sequential(*[Conv2dLayerNorm(dim, dim, kernel_size, stride, padding, groups, activation, add_residual) for _ in range(num_layers)])
         self.proj = nn.Linear(dim, dim, bias=True) # decoder to patch
         self.f = num_freq_patches
         self.t = num_time_patches
         self.mask_token = nn.Parameter(torch.randn(1, 1, dim) * 0.02)
-        self.drop_masked_tokens = drop_masked_tokens
         
-    def forward(self, x, length=None, ids_keep_sorted=None):
-        if self.drop_masked_tokens:  # default EAT where the student only processes unmasked tokens.
-            x_decoder = self.mask_token.repeat(x.shape[0], length, 1)
-            x_decoder.scatter_(1, ids_keep_sorted, x)
-        else:  # we did not drop the masked tokens in the student encoder and the shape is correct.
-            x_decoder = x
-        
-        x = x_decoder.transpose(-2, -1)  # B, D, L
+    def forward(self, x, ids_restore):
+        mask_tokens = self.mask_token.repeat(x.shape[0], ids_restore.shape[1] - x.shape[1], 1)
+        x = torch.cat([x, mask_tokens], dim=1)
+        x = torch.gather(x, dim=1, index=ids_restore)
+        x = x.transpose(-2, -1)  # B, D, L
         x = x.reshape(x.shape[0], x.shape[1], self.t, self.f)
         x = self.blocks(x)
         x = x.flatten(2).transpose(-2, -1)  # B, L, D
@@ -442,20 +423,16 @@ class MLP_LSTM_Block(nn.Module):
         return out
 
 class MLP_LSTM_Decoder(nn.Module):
-    def __init__(self, dim=768, drop=0., activation=nn.GELU, bidirectional=True, add_residual=True, num_layers=2, drop_masked_tokens=True, **kwargs):
+    def __init__(self, dim=768, drop=0., activation=nn.GELU, bidirectional=True, add_residual=True, num_layers=2, **kwargs):
         super().__init__()
         self.blocks = nn.Sequential(*[MLP_LSTM_Block(dim, drop, activation, bidirectional, add_residual) for _ in range(num_layers)])
         self.mask_token = nn.Parameter(torch.randn(1, 1, dim) * 0.02)
-        self.drop_masked_tokens = drop_masked_tokens
-
-    def forward(self, x, length=None, ids_keep_sorted=None):
-        if self.drop_masked_tokens:  # default EAT where the student only processes unmasked tokens.
-            x_decoder = self.mask_token.repeat(x.shape[0], length, 1)
-            x_decoder.scatter_(1, ids_keep_sorted, x)
-        else:  # we did not drop the masked tokens in the student encoder and the shape is correct.
-            x_decoder = x
-        return self.blocks(x_decoder)
         
+    def forward(self, x, ids_restore):
+        mask_tokens = self.mask_token.repeat(x.shape[0], ids_restore.shape[1] - x.shape[1], 1)
+        x = torch.cat([x, mask_tokens], dim=1)
+        x = torch.gather(x, dim=1, index=ids_restore)
+        return self.blocks(x)
 
 # Vit Encoder for EAT
 ## https://github.com/huggingface/pytorch-image-models/blob/main/timm/layers/drop.py#L170
@@ -516,7 +493,7 @@ class Mlp(nn.Module):
         return x
 
 class Attention(nn.Module):
-    def __init__(self, dim, num_heads=12, qkv_bias=False, qk_norm=False, scale_norm=False, proj_bias=True, attn_drop=0., proj_drop=0., norm_layer=nn.LayerNorm, use_rope=False):
+    def __init__(self, dim, num_heads=8, qkv_bias=False, qk_norm=False, scale_norm=False, proj_bias=True, attn_drop=0., proj_drop=0., norm_layer=nn.LayerNorm):
         """
         Args:
             dim: Input dimension of the token embeddings
@@ -530,6 +507,8 @@ class Attention(nn.Module):
         """
         super().__init__()
         assert dim % num_heads == 0, 'dim should be divisible by num_heads'
+        # if qk_norm or scale_norm:
+            # assert norm_layer is not None, 'norm_layer must be provided if qk_norm or scale_norm is True'
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         self.scale = self.head_dim ** -0.5
@@ -540,21 +519,13 @@ class Attention(nn.Module):
         self.norm = norm_layer(dim) if scale_norm else nn.Identity()
         self.proj = nn.Linear(dim, dim, bias=proj_bias)
         self.proj_drop = nn.Dropout(proj_drop)
-        if use_rope:
-            self.rotary_emb = RotaryEmbedding(dim=self.head_dim // 2)
-        else:
-            self.rotary_emb = None
 
     def forward(self, x, attn_mask=None):
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
         q, k = self.q_norm(q), self.k_norm(k)
-
-        if self.rotary_emb is not None:
-            q = self.rotary_emb.rotate_queries_or_keys(q)
-            k = self.rotary_emb.rotate_queries_or_keys(k)
-        
+      
         q = q * self.scale
         attn = q @ k.transpose(-2, -1)
         # attn = maybe_add_mask(attn, attn_mask)
@@ -568,15 +539,14 @@ class Attention(nn.Module):
         x = self.proj_drop(x)
         return x
 
-
 class AltBlock(nn.Module):
-    def __init__(self, dim, num_heads, mlp_ratio=4.0, qkv_bias=False, drop=0.0, attn_drop=0.0, drop_path=0.0, act_layer=nn.GELU, norm_layer=nn.LayerNorm, layer_norm_first=False, ffn_targets=True, use_rope=False):
+    def __init__(self, dim, num_heads, mlp_ratio=4.0, qkv_bias=False, drop=0.0, attn_drop=0.0, drop_path=0.0, act_layer=nn.GELU, norm_layer=nn.LayerNorm, layer_norm_first=False, ffn_targets=True):
         super().__init__()
 
         self.layer_norm_first = layer_norm_first
         self.ffn_targets = ffn_targets
         self.norm1 = norm_layer(dim)
-        self.attn = Attention(dim, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop, use_rope=use_rope)
+        self.attn = Attention(dim, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
@@ -600,7 +570,6 @@ class AltBlock(nn.Module):
                 t = x
             return x, t
 
-
 class PatchEmbed(nn.Module):
 
     def __init__(self, img_size=(512, 128), patch_size=(16, 16), in_chans=1, emb_dim=768):
@@ -617,46 +586,70 @@ class PatchEmbed(nn.Module):
         x = x.transpose(1, 2) # B, 768, 256 -> B, 256, 768
         return x
 
-
 class ViT_MaskedEncoder(nn.Module):
-    def __init__(self, input_shape=(512, 128), patch_size=(16, 16), embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True, drop=0., attn_drop=0., drop_path_rate=0.,
-                 pos_trainable=False, clone_size=16, mode='student', mask_mode='inv', use_rope=False, drop_masked_tokens=True):
+    def __init__(self, input_shape=(512, 128), patch_size=(16, 16), embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True, drop=0., attn_drop=0., drop_path_rate=0., pos_trainable=False, clone_size=16, mode='student', mask_mode='inv'):
         super().__init__()
         
         assert mode in ['student', 'teacher']
-        assert mask_mode in ['rand', 'inv']
+        assert mask_mode in ['rand', 'inv', 'seq']
         assert (input_shape[0] % patch_size[0]) == 0 and (input_shape[1] % patch_size[1]) == 0
         
         if mode == 'student':
             self.forward_fn = self.student_forward
             if mask_mode == 'rand':
                 self.mask_fn = self.random_masking
-            else:
+            elif mask_mode == 'inv':
                 self.mask_fn = self.inverse_block_mask
+            else:
+                self.mask_fn = self.sequential_mask
+                assert patch_size[0] == 1 and patch_size[1] == input_shape[1]
         else:
             self.forward_fn = self.teacher_forward
             self.mask_fn = None
 
-        self.use_rope = use_rope
-        self.drop_masked_tokens = drop_masked_tokens
         self.clone_size = clone_size
         self.patch_size = patch_size
         self.patch_embed = PatchEmbed(input_shape, patch_size, 1, embed_dim)
-        if not use_rope:
-            pos_embed = get_2d_sincos_pos_embed_flexible(embed_dim, self.patch_embed.patch_ft, cls_token=True)
-            self.pos_embed = nn.Parameter(torch.from_numpy(pos_embed).float().unsqueeze(0), requires_grad=pos_trainable)
-        # else:
-            # self.pos_embed = nn.Parameter(torch.zero(1, 257, embed_dim).float(), requires_grad=False)
+        pos_embed = get_2d_sincos_pos_embed_flexible(embed_dim, self.patch_embed.patch_ft, cls_token=True)
+        self.pos_embed = nn.Parameter(torch.from_numpy(pos_embed).float().unsqueeze(0), requires_grad=pos_trainable)
         self.cls_token = nn.Parameter(torch.randn(1, 1, embed_dim) * 0.02) # 1, 1, 768
         norm_layer = partial(nn.LayerNorm, eps=1e-6)
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
-        self.blocks = nn.ModuleList([AltBlock(embed_dim, num_heads, mlp_ratio, qkv_bias, drop, attn_drop, dpr[i], norm_layer=norm_layer, use_rope=use_rope) for i in range(depth)])
+        self.blocks = nn.ModuleList([AltBlock(embed_dim, num_heads, mlp_ratio, qkv_bias, drop, attn_drop, dpr[i], norm_layer=norm_layer) for i in range(depth)])
         self.norm = norm_layer(embed_dim)
+
+    def sequential_mask(self, shape, mask_ratio=0.8, num_sub_seq=4):
+        
+        if mask_ratio == 0:
+            return None, None, None
+                
+        B, L, D = shape
+        B = B * self.clone_size
+        sub_seq_len = L // num_sub_seq
+        sub_seq_mask_len = int(mask_ratio * sub_seq_len)
+        sub_seq_mask_max_start_idx = sub_seq_len - sub_seq_mask_len
+
+        # 1 are places to remove, 0 are places to keep.
+        mask = torch.zeros((B, L))
+        for b in range(B):
+            for i in range(num_sub_seq):
+                start = random.randint(0, sub_seq_mask_max_start_idx - 1) + i * sub_seq_len
+                mask[b, start:start+sub_seq_mask_len] = 1
+            
+        mask = mask.to(torch.uint8)
+        ids_shuffle = mask.argsort(dim=1)
+        ids_restore = ids_shuffle.argsort(dim=1).unsqueeze(-1).expand(-1, -1, D)
+        
+        len_keep = L - mask[0].sum()
+        ids_keep = ids_shuffle[:, :len_keep]
+        ids_keep = ids_keep.unsqueeze(-1).expand(-1, -1, D)
+        
+        return mask.float(), ids_keep, ids_restore
         
     def inverse_block_mask(self, shape, mask_ratio=0.8, mask_length=5, mask_prob_adjust=0.07, require_same_masks=True):
         
         if mask_ratio == 0:
-            return None, None
+            return None, None, None
         
         assert mask_length > 1
         
@@ -693,6 +686,7 @@ class ViT_MaskedEncoder(nn.Module):
             for i in range(len(mask)):
                 n = n_masks[i]
                 m = mask[i]
+                r = 0
                 if n > target_len:
                     to_unmask = torch.multinomial(m, int(n - target_len), replacement=False)
                     m[to_unmask] = 0
@@ -704,21 +698,22 @@ class ViT_MaskedEncoder(nn.Module):
         mask = 1 - mask  
         mask = mask.to(torch.uint8)
         ids_shuffle = mask.argsort(dim=1)
+        ids_restore = ids_shuffle.argsort(dim=1).unsqueeze(-1).expand(-1, -1, D)
         len_keep = L - mask[0].sum()
         ids_keep = ids_shuffle[:, :len_keep]
-        
-        return mask.float(), ids_keep
+        ids_keep = ids_keep.unsqueeze(-1).expand(-1, -1, D)
+        return mask.float(), ids_keep, ids_restore
     
     def random_masking(self, shape, mask_ratio=0.8):
         
         if mask_ratio == 0:
-            return None, None
+            return None, None, None
         
         B, L, D = shape  # batch, length, dim
         B *= self.clone_size
         
         len_keep = int(L * (1 - mask_ratio))    
-        noise = torch.rand(B, L, device=self.cls_token.device)  # noise in [0, 1]
+        noise = torch.rand(B, L, device=x.device)  # noise in [0, 1]
         
         # sort noise for each sample
         ids_shuffle = noise.argsort(dim=1)  # ascend: small is keep, large is remove
@@ -733,36 +728,27 @@ class ViT_MaskedEncoder(nn.Module):
         # unshuffle to get the binary mask
         mask = torch.gather(mask, dim=1, index=ids_restore)
         
-        return mask, ids_keep
+        ids_restore = ids_restore.unsqueeze(-1).repeat(1, 1, D)
+        ids_keep = ids_keep.unsqueeze(-1).expand(-1, -1, D)
+        
+        return mask, ids_keep, ids_restore
                 
     def student_forward(self, x, mask_ratio=None):
         x = self.patch_embed(x)  # B, 1, T, F -> B, L=256, D=768
-        
-        if not self.use_rope:
-            x = x + self.pos_embed[:, 1:, :]
+        x = x + self.pos_embed[:, 1:, :]
         
         # generate masks of shape: (B*clone_size, L)
-        mask, ids_keep = self.mask_fn(x.shape, mask_ratio)
-        ids_keep_sorted, _ = ids_keep.sort(dim=1)  # safe even if you expand first since the last dimesion is the repeatition of the second dimension index
-        mask, ids_keep_sorted = mask.to(x), ids_keep_sorted.unsqueeze(-1).expand(-1, -1, x.shape[2]).to(x.device)
+        mask, ids_keep, ids_restore = self.mask_fn(x.shape, mask_ratio)
+        mask, ids_keep, ids_restore = mask.to(x.device), ids_keep.to(x.device), ids_restore.to(x.device)
 
         # repeat the inputs for clone_size on batch axis
         x = x.repeat_interleave(self.clone_size, dim=0)
 
         # mask the input
-        if self.drop_masked_tokens:
-            x = torch.gather(x, dim=1, index=ids_keep_sorted)  # B * clone_size, L * (1 - mask_ratio), D
-        else:
-            mask = mask.unsqueeze(2)  # B, L, 1
-            mask_keep = 1. - mask  # now 1 is keep and 0 is drop
-            x = (x * mask_keep) + (mask * torch.randn_like(x) * 0.1)
-            mask = mask.squeeze(2)
+        x = torch.gather(x, dim=1, index=ids_keep)  # B * clone_size, L * (1 - mask_ratio), D
         
         # append cls token
-        if not self.use_rope:
-            cls_token = self.cls_token + self.pos_embed[:, :1, :]
-        else:
-            cls_token = self.cls_token
+        cls_token = self.cls_token + self.pos_embed[:, :1, :]
         cls_tokens = cls_token.expand(x.shape[0], -1, -1)
         x = torch.cat((cls_tokens, x), dim=1)
         
@@ -775,14 +761,13 @@ class ViT_MaskedEncoder(nn.Module):
         cls_tokens = x[:, 0]
         patch_tokens = x[:, 1:]
         
-        return cls_tokens, patch_tokens, mask, ids_keep_sorted
+        return cls_tokens, patch_tokens, mask, ids_restore
 
     def teacher_forward(self, x, mask_ratio=None):
         x = self.patch_embed(x)  # B, C=1, T=512, F=128 -> B, L=256, D=768
         cls_tokens = self.cls_token.expand(x.shape[0], -1, -1)
         x = torch.cat((cls_tokens, x), dim=1)
-        if not self.use_rope:
-            x = x + self.pos_embed
+        x = x + self.pos_embed
         features = []
         for blk in self.blocks:
             x, t = blk(x)
@@ -810,9 +795,7 @@ class EAT_Student(nn.Module):
                  drop_path_rate=0,
                  pos_trainable=False,
                  clone_size=16,
-                 use_rope=False,
                  mask_mode='inv',
-                 drop_masked_tokens=True,
                  cls_task='regression',
                  dinohead_kwargs={'out_dim': 65536, 'use_bn': False, 'nlayers': 3, 'hidden_dim': 2048, 'bottleneck_dim': 256, 'mlp_bias': True},
                  decoder_cls=CNN2dDecoder,
@@ -821,26 +804,22 @@ class EAT_Student(nn.Module):
         
         super().__init__()
         assert cls_task in ['regression', 'clustering']
-        self.use_rope = use_rope
-        self.drop_masked_tokens = drop_masked_tokens
         self.cls_task = cls_task
         self.clone_size = clone_size
-        self.encoder = ViT_MaskedEncoder(input_shape, patch_size, embed_dim, depth, num_heads, mlp_ratio, qkv_bias, drop, attn_drop, drop_path_rate, pos_trainable,
-                                         clone_size, mode='student', mask_mode=mask_mode, use_rope=use_rope, drop_masked_tokens=drop_masked_tokens)
+        self.encoder = ViT_MaskedEncoder(input_shape, patch_size, embed_dim, depth, num_heads, mlp_ratio, qkv_bias, drop, attn_drop, drop_path_rate, pos_trainable, clone_size, mode='student', mask_mode=mask_mode)
         if cls_task == 'clustering':
             dinohead_kwargs['in_dim'] = embed_dim
             self.head = DINOHead(**dinohead_kwargs)
         decoder_kwargs['num_freq_patches'] = self.encoder.patch_embed.patch_ft[0]
         decoder_kwargs['num_time_patches'] = self.encoder.patch_embed.patch_ft[1]
         decoder_kwargs['dim'] = embed_dim
-        decoder_kwargs['drop_masked_tokens'] = drop_masked_tokens
         self.decoder = decoder_cls(**decoder_kwargs)
         self.initialize_weights()
         
+        
     def initialize_weights(self):
-        if not self.use_rope:
-            pos_embed = get_2d_sincos_pos_embed_flexible(self.encoder.pos_embed.shape[-1], self.encoder.patch_embed.patch_ft, cls_token=True)
-            self.encoder.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+        pos_embed = get_2d_sincos_pos_embed_flexible(self.encoder.pos_embed.shape[-1], self.encoder.patch_embed.patch_ft, cls_token=True)
+        self.encoder.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
         w = self.encoder.patch_embed.proj.weight.data
         torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
         torch.nn.init.normal_(self.encoder.cls_token, std=.02)
@@ -852,15 +831,17 @@ class EAT_Student(nn.Module):
             torch.nn.init.xavier_uniform_(m.weight)
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
+        # elif isinstance(m, nn.LayerNorm):
+            # nn.init.constant_(m.bias, 0)
+            # nn.init.constant_(m.weight, 1.0)
     
     def forward(self, x, mask_ratio=0.8):
         """
         args:
             x - input mel-spectrogram of shape B, 1, T, F 
         """
-        cls_tokens, patch_tokens, mask, ids_keep_sorted = self.encoder(x, mask_ratio)
-        length = mask.shape[1]
-        patch_tokens = self.decoder(patch_tokens, length, ids_keep_sorted)
+        cls_tokens, patch_tokens, mask, ids_restore = self.encoder(x, mask_ratio)
+        patch_tokens = self.decoder(patch_tokens, ids_restore)
         return cls_tokens, patch_tokens, mask
 
     
@@ -880,7 +861,6 @@ class EAT_Teacher(nn.Module):
                  drop_path_rate=0,
                  pos_trainable=False,
                  clone_size=16,
-                 use_rope=False,
                  cls_task='regression',
                  dinohead_kwargs={'out_dim': 65536, 'use_bn': False, 'nlayers': 3, 'hidden_dim': 2048, 'bottleneck_dim': 256, 'mlp_bias': True},
                  average_top_k_layers=12,
@@ -895,8 +875,7 @@ class EAT_Teacher(nn.Module):
         assert cls_task in ['regression', 'clustering']
         self.cls_task = cls_task
         self.clone_size = clone_size
-        self.encoder = ViT_MaskedEncoder(input_shape, patch_size, embed_dim, depth, num_heads, mlp_ratio, qkv_bias, drop, attn_drop, drop_path_rate, pos_trainable,
-                                         clone_size, mode='teacher', use_rope=use_rope)
+        self.encoder = ViT_MaskedEncoder(input_shape, patch_size, embed_dim, depth, num_heads, mlp_ratio, qkv_bias, drop, attn_drop, drop_path_rate, pos_trainable, clone_size, mode='teacher')
         if cls_task == 'clustering':
             dinohead_kwargs['in_dim'] = embed_dim
             self.head = DINOHead(**dinohead_kwargs)
@@ -1077,7 +1056,7 @@ class KoLeoLoss(nn.Module):
         Args:
             student_output (BxD): backbone output of student
         """
-        with torch.autocast(device_type=student_output.device, enabled=False):
+        with torch.autocast(device_type=student_output.device.type, enabled=False): #change
             student_output = F.normalize(student_output, eps=eps, p=2, dim=-1)
             I = self.pairwise_NNs_inner(student_output)  # noqa: E741
             distances = self.pdist(student_output, student_output[I])  # BxD, BxD -> B
