@@ -27,7 +27,7 @@ cd /mnt/home/lrauch/projects/birdMAE/
 hostname
 srun python pretrain.py \
         experiment=eat/pretrain_xcl_eat_base.yaml \
-        task_name="eat_base_xcl_koleo" \
+        task_name="eat_base_xcl_var_patch_multiview" \
         trainer.devices=4 \
         +trainer.num_nodes=1 \
         trainer.precision=16-mixed \

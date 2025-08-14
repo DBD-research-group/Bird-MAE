@@ -39,11 +39,12 @@ encoder:
 
 task: 
   cls_task: "regression"
-  feature_regularizer: "koleo"
+  feature_regularizer: "var"
   clustering_regularizer: null
   regularize_patch_tokens: true
   use_teacher_assistant: false
   num_clusters: null
+  multi_view: false
 
 teacher_assistant: null
 
