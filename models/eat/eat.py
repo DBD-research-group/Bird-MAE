@@ -137,9 +137,11 @@ class EAT(L.LightningModule):
         self.teacher.requires_grad_(False)
         if self.cls_task_is_clustering and cfg_task.clustering_regularizer == 'gini':
             self.teacher.head.requires_grad_(True)
-        
-        # self.student.compile(mode=compile_mode)
-        # self.teacher.compile(mode=compile_mode)
+
+        if compile_mode is not None:
+            print(f"Compiling student and teacher with mode {compile_mode}")
+            self.student.compile(mode=compile_mode)
+            self.teacher.compile(mode=compile_mode)
         
         if cfg_task.use_teacher_assistant:
             self.teacher_assistant = EAT_Teacher(input_shape=(cfg_teacher_assistant.input_shape_t, cfg_teacher_assistant.input_shape_f),
@@ -312,7 +314,8 @@ class EAT(L.LightningModule):
 
             base_lr = self.optimizer_cfg["lr"]            # 0.0005 from paper
             scaled_lr = base_lr * eff_batch / 768 # 768 = 12*16*4
-            self.optimizer_cfg["lr"] = scaled_lr        
+            self.optimizer_cfg["lr"] = scaled_lr    
+            print(f"Scaled LR: {scaled_lr}")    
 
         param_groups = param_groups_weight_decay(self.student, self.optimizer_cfg["weight_decay"], no_weight_decay_list=("bias", "bn", "ln", "gn", "norm"))
 

@@ -61,10 +61,14 @@ module:
     freeze_backbone: false
     global_pool: cls
     #pretrained_weights_path: /home/lrauch/mnt_check/pretrain_xcl_eat_base/runs/XCL/EAT/2025-07-23_225933/callback_checkpoints/EAT_XCL_epoch=29.ckpt
-    pretrained_weights_path: /home/lrauch/mnt_check/pretrain_xcl_eat_base/runs/XCL/EAT/2025-07-27_125911/callback_checkpoints/EAT_XCL_epoch=34.ckpt
+    #pretrained_weights_path: /home/lrauch/mnt_check/pretrain_xcl_eat_base/runs/XCL/EAT/2025-07-27_125911/callback_checkpoints/EAT_XCL_epoch=34.ckpt
+    #pretrained_weights_path: /home/lrauch/mnt_check/eat_base_xcl_var/runs/XCL/EAT/2025-08-03_105722/callback_checkpoints/EAT_XCL_epoch=39.ckpt # eat+var
+    #pretrained_weights_path: /home/lrauch/mnt_check/pretrain_xcl_eat_base/runs/XCL/EAT/2025-08-08_124305/callback_checkpoints/EAT_XCL_epoch=59.ckpt # eat+dino
+    pretrained_weights_path: /home/lrauch/mnt_check/pretrain_xcl_eat_base/runs/XCL/EAT/2025-08-05_102803/callback_checkpoints/EAT_XCL_epoch=19.ckpt # eat+dino
+
     #pretrained_weights_path: /home/lrauch/mnt_check/pretrain_xcl_eat_base/runs/XCL/EAT/2025-07-27_105702/callback_checkpoints/EAT_XCL_epoch=44.ckpt
-    ppnet_cfg: 
-      last_layer_lr: ${module.optimizer.target.lr}
-      prototype_lr: 0.04
-      focal_similarity: true
-      num_prototypes: 20
+    ppnet_cfg: null
+      # last_layer_lr: ${module.optimizer.target.lr}
+      # prototype_lr: 0.04
+      # focal_similarity: true
+      # num_prototypes: 20

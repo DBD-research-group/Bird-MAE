@@ -24,7 +24,7 @@ paths:
 
 logger:
   experiment_name: ${task_name}
-  tracking_uri: sqlite:////mnt/work/bird2vec/ssl.db
+  tracking_uri: sqlite:////mnt/work/bird2vec/ssl_eat2.db
 
 data:
   loaders:

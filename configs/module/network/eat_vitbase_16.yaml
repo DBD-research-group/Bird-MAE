@@ -41,6 +41,7 @@ task:
   clustering_regularizer: null
   regularize_patch_tokens: true
   use_teacher_assistant: false
+  num_clusters: null
 
 teacher_assistant: null
 

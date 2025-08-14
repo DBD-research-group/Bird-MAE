@@ -5,8 +5,8 @@
 #SBATCH --gres=gpu:4
 #SBATCH --mem=290gb
 #SBATCH --partition=main
-#SBATCH --job-name=eat_base_xcl_long
-#SBATCH --output=/mnt/work/bird2vec/logs/eat/eat_base_var.log
+#SBATCH --job-name=eat_base_xcl_var_60
+#SBATCH --output=/mnt/work/bird2vec/logs/eat/eat_base_var_60.log
 #SBATCH --time=6-15:00:00  
 ###SBATCH --exclude=gpu-v100-3
 #SBATCH --nodelist=gpu-l40s-1
@@ -15,7 +15,7 @@ date;hostname;pwd
 source /mnt/home/lrauch/.zshrc
 #source ~/envs/gadme_v1/bin/activate
 echo Activate conda
-conda activate gadme_v1_lightningup
+conda activate gadme_v1
 echo $PYTHONPATH
 
 cd /mnt/home/lrauch/projects/birdMAE/
@@ -26,13 +26,14 @@ cd /mnt/home/lrauch/projects/birdMAE/
 hostname
 srun python pretrain.py \
         experiment=eat/pretrain_xcl_eat_base.yaml \
+        task_name="eat_base_xcl_var" \
         trainer.devices=4 \
         +trainer.num_nodes=1 \
         trainer.precision=16-mixed \
         data.transform.waveform_augmentations.mixup_wave.p=0.0 \
         trainer.max_epochs=60 \
-        data.loaders.train.batch_size=48 \
-        data.loaders.train.num_workers=8 \
+        data.loaders.train.batch_size=64 \
+        data.loaders.train.num_workers=16 \
         data.loaders.train.pin_memory=true \
         +data.loaders.train.prefetch_factor=2 \
         trainer.gradient_clip_val=1.0 \

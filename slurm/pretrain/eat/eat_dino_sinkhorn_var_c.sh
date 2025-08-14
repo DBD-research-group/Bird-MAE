@@ -5,8 +5,8 @@
 #SBATCH --gres=gpu:2
 #SBATCH --mem=290gb
 #SBATCH --partition=main
-#SBATCH --job-name=eat_base_xcl_koleo
-#SBATCH --output=/mnt/work/bird2vec/logs/eat/eat_base_koleo_2gpus.log
+#SBATCH --job-name=eat_base_xcl_dino_sinkhorn_var_res_2
+#SBATCH --output=/mnt/work/bird2vec/logs/eat/eat_base_xcl_dino_sinkhorn_var_res_2.log
 #SBATCH --time=6-15:00:00  
 ###SBATCH --exclude=gpu-v100-3
 #SBATCH --nodelist=gpu-l40s-1
@@ -20,13 +20,13 @@ echo $PYTHONPATH
 
 cd /mnt/home/lrauch/projects/birdMAE/
 
+
 # export CUDA_LAUNCH_BLOCKING=1
 # export HYDRA_FULL_ERROR=1
 
 hostname
 srun python pretrain.py \
         experiment=eat/pretrain_xcl_eat_base.yaml \
-        task_name="eat_base_xcl_koleo" \
         trainer.devices=2 \
         +trainer.num_nodes=1 \
         trainer.precision=16-mixed \
@@ -38,11 +38,14 @@ srun python pretrain.py \
         +data.loaders.train.prefetch_factor=2 \
         trainer.gradient_clip_val=1.0 \
         module.optimizer.target.lr=5e-4 \
-        module.network.task.cls_task="regression" \
-        module.network.task.feature_regularizer="koleo" \
-        module.network.task.clustering_regularizer=null \
+        module.network.task.cls_task="clustering" \
+        module.network.task.feature_regularizer="var" \
+        module.network.task.clustering_regularizer="sinkhornknopp" \
         module.network.task.regularize_patch_tokens=false \
         module.network.task.use_teacher_assistant=false \
+        module.network.task.num_clusters=65536 \
+        #module.network.compile_mode=null \
+        ckpt_path="/mnt/work/bird2vec/logs_pretrain_eat/pretrain_xcl_eat_base/runs/XCL/EAT/2025-08-05_102803/callback_checkpoints/last.ckpt"
 
         #data.dataset.save_to_disk="/scratch/birdset/XCL/XCL_processed_500_2events_ogg_addsoundscapes-hsn" \
         #trainer.strategy=ddp_find_unused_parameters_true \
