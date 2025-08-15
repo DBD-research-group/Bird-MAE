@@ -9,7 +9,7 @@ defaults:
   #- override /module/network: vit_large_16.yaml
   #- override /module/network: vit_large_16.yaml
 #  - override /module/network: vit_base_16.yaml
-  - override /module/network: vit_huge_16.yaml
+  - override /module/network: vit_base_16.yaml
   #- override /module/network: convnext.yaml
   - override /module/optimizer: adamw
   - override /module/scheduler: cosine
@@ -26,7 +26,7 @@ train: true
 test: true
 
 logger:
-  experiment_name: ablate_hsn
+  experiment_name: overnight_hsn_base
 
 data:
   loaders:
@@ -52,7 +52,7 @@ module:
   optimizer:
     target:
       #lr: 5e-4
-      lr: 4e-4
+      lr: 0.001
       #lr: 5e-4
       #lr: 1e-4
       #weight_decay: 3e-2
@@ -67,6 +67,6 @@ module:
       
   network:
     ema_update_rate: null
-    freeze_backbone: true
-    global_pool: attentive
+    freeze_backbone: false
+    global_pool: true
       

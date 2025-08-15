@@ -10,7 +10,7 @@ defaults:
   #- override /module/network: convnext.yaml
   - override /module/optimizer: adamw
   - override /module/scheduler: cosine
-  - override /module/loss: asymmetric_poly_loss.yaml
+  - override /module/loss: asymmetric_loss.yaml
   #- override /module/loss: binary_cross_entropy.yaml
   - override /module/metric: birdset_collection
   - override /paths: workstation
@@ -24,7 +24,7 @@ train: true
 test: true
 
 logger:
-  experiment_name: ablate_hsn
+  experiment_name: test
 
 data:
   loaders:
@@ -65,8 +65,8 @@ module:
   network:
     ema_update_rate: null
     name: VIT_ppnet
-    freeze_backbone: True
-    ppnet:
-      num_prototypes: 20
-      last_layer_lr: 1e-4
+    freeze_backbone: False
+    global_pool: true
+      # num_prototypes: 20
+      # last_layer_lr: 1e-4
       

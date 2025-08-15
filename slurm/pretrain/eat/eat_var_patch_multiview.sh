@@ -1,12 +1,12 @@
 #!/usr/bin/zsh
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=4
+#SBATCH --ntasks-per-node=8
 #SBATCH --cpus-per-task=16
-#SBATCH --gres=gpu:4
-#SBATCH --mem=290gb
+#SBATCH --gres=gpu:8
+#SBATCH --mem=150gb
 #SBATCH --partition=main
-#SBATCH --job-name=eat_base_xcl_var_patched_multiview
-#SBATCH --output=/mnt/work/bird2vec/logs/eat/eat_base_var_patched_multiview.log
+#SBATCH --job-name=eat_base_xcl_var_patched_multiview_8
+#SBATCH --output=/mnt/work/bird2vec/logs/eat/eat_base_var_patched_multiview_8.log
 #SBATCH --time=6-15:00:00  
 ###SBATCH --exclude=gpu-v100-3
 #SBATCH --nodelist=gpu-l40s-1
@@ -28,13 +28,13 @@ hostname
 srun python pretrain.py \
         experiment=eat/pretrain_xcl_eat_base.yaml \
         task_name="eat_base_xcl_var_patch_multiview" \
-        trainer.devices=4 \
+        trainer.devices=8 \
         +trainer.num_nodes=1 \
         trainer.precision=16-mixed \
         trainer.strategy=auto \
         data.transform.waveform_augmentations.mixup_wave.p=0.0 \
         trainer.max_epochs=60 \
-        data.loaders.train.batch_size=64 \
+        data.loaders.train.batch_size=32 \
         data.loaders.train.num_workers=16 \
         data.loaders.train.pin_memory=true \
         +data.loaders.train.prefetch_factor=2 \
