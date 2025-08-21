@@ -34,7 +34,7 @@ srun python pretrain.py \
         trainer.strategy=auto \
         data.transform.waveform_augmentations.mixup_wave.p=0.0 \
         trainer.max_epochs=60 \
-        data.loaders.train.batch_size=32 \
+        data.loaders.train.batch_size=16 \
         data.loaders.train.num_workers=16 \
         data.loaders.train.pin_memory=true \
         +data.loaders.train.prefetch_factor=2 \
