@@ -232,7 +232,7 @@ class EAT(L.LightningModule):
         # forward
         cache = self(audio, self.mask_ratio)
         
-        mask = cache['mask'].float()  # masked patches are 1 and visible ones are 0 (in student input)
+        mask = cache['mask'].to(cache['student_patch_tokens'].device).float()  # masked patches are 1 and visible ones are 0
         student_cls_tokens = cache['student_cls_tokens'].float()  # cls token from last student layer
         student_patch_tokens = cache['student_patch_tokens'].float()  # other token from last student layer
         teacher_patch_tokens = cache['teacher_patch_tokens'].float()  # average of tokens across layers without cls
