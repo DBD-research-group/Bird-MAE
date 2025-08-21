@@ -26,6 +26,7 @@ encoder:
   mask_mode: 'inv'        # ''rand' for random masking
   use_rope: false
   drop_masked_tokens: true
+  informed_masking: false
 
 # decoder:
 #   name: 

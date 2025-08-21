@@ -9,11 +9,12 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from util.pos_embed import get_2d_sincos_pos_embed_flexible
-from .rotary_embedding_torch import RotaryEmbedding
+from rotary_embedding_torch import RotaryEmbedding
 import lightning as L
 import hydra
 from timm.optim.optim_factory import param_groups_weight_decay
 from transformers import get_cosine_schedule_with_warmup
+
 
 class EAT(L.LightningModule):
     def __init__(self, 
@@ -48,6 +49,9 @@ class EAT(L.LightningModule):
         self.cfg_task = cfg_task
 
         self.cls_task_is_clustering = cfg_task.cls_task == 'clustering' 
+
+        if cfg_encoder.informed_masking:
+            assert cfg_encoder.drop_masked_tokens, "set drop_masked_tokens to True if you want informed masking."
 
         activation = nn.GELU
 
@@ -105,6 +109,7 @@ class EAT(L.LightningModule):
                                    use_rope=cfg_encoder.use_rope,  # rotary positional embedding
                                    mask_mode=cfg_encoder.mask_mode, 
                                    drop_masked_tokens=cfg_encoder.drop_masked_tokens,  # True is like default EAT
+                                   informed_masking=cfg_encoder.informed_masking,
                                    cls_task=cfg_task.cls_task,
                                    dinohead_kwargs=dinohead_kwargs,
                                    decoder_cls=decoder_cls,
@@ -199,14 +204,13 @@ class EAT(L.LightningModule):
         
         # student output shapes: (B=batch_size*clone_size*views, D=768), (B, L=256, D), (B, L)
         cache['student_cls_tokens'], cache['student_patch_tokens'], cache['mask'] = self.student(x, mask_ratio)
-
-        # ALWAYS get teacher outputs (needed for both clustering and regression)
+            
         with torch.no_grad():
             teacher_cls_tokens, cache['teacher_patch_tokens'] = self.teacher(x)  # (B, D), (B, L, D)
             if self.teacher_assistant is not None:
                 _, cache['assistant_patch_tokens'] = self.teacher_assistant(x)  # _, (B, L, D)
-
-        # Only do clustering-specific processing if clustering task
+            
+        # do this outside no grad context
         if self.cls_task_is_clustering:
             cache['student_cls_tokens_after_head'] = self.student.head(cache['student_cls_tokens'])  # B, C=clusters
             cache['teacher_cls_tokens_after_head'] = self.teacher.head(teacher_cls_tokens)  # B, C
@@ -388,7 +392,8 @@ class Conv2dLayerNorm(nn.Module):
         return x
 
 class CNN2dDecoder(nn.Module):
-    def __init__(self, dim=768, kernel_size=3, stride=1, padding='same', groups=16, activation=nn.GELU, add_residual=True, num_layers=6, num_freq_patches=8, num_time_patches=32, drop_masked_tokens=True):
+    def __init__(self, dim=768, kernel_size=3, stride=1, padding='same', groups=16, activation=nn.GELU, add_residual=True, num_layers=6, num_freq_patches=8, num_time_patches=32,
+                 drop_masked_tokens=True, informed_masking=False):
         super().__init__()
         self.blocks = nn.Sequential(*[Conv2dLayerNorm(dim, dim, kernel_size, stride, padding, groups, activation, add_residual) for _ in range(num_layers)])
         self.proj = nn.Linear(dim, dim, bias=True) # decoder to patch
@@ -396,12 +401,21 @@ class CNN2dDecoder(nn.Module):
         self.t = num_time_patches
         self.mask_token = nn.Parameter(torch.randn(1, 1, dim) * 0.02)
         self.drop_masked_tokens = drop_masked_tokens
+        self.informed_masking = informed_masking
         
-    def forward(self, x, length=None, ids_keep_sorted=None):
-        if self.drop_masked_tokens:  # default EAT where the student only processes unmasked tokens.
-            x_decoder = self.mask_token.repeat(x.shape[0], length, 1)
-            x_decoder.scatter_(1, ids_keep_sorted, x)
-        else:  # we did not drop the masked tokens in the student encoder and the shape is correct.
+    def forward(self, x, mask_info):
+        if self.drop_masked_tokens:
+            if self.informed_masking:  # our modification
+                index = mask_info['restore_indices_for_decoder']  # B, 256
+                index = index.unsqueeze(2).expand(-1, -1, x.shape[2]).to(x.device)  # B, 256, D
+                x_decoder = torch.gather(x, dim=1, index=index)
+            else:  # default EAT where the student only processes unmasked tokens.
+                index = mask_info['ids_keep_sorted']  # B, 51
+                index = index.unsqueeze(2).expand(-1, -1, x.shape[2]).to(x.device)
+                length = mask_info['mask'].shape[1]  # L = 256
+                x_decoder = self.mask_token.repeat(x.shape[0], length, 1)
+                x_decoder.scatter_(1, index, x)
+        else:  # we did not drop the masked tokens in the student encoder and everything is in correct order.
             x_decoder = x
         
         x = x_decoder.transpose(-2, -1)  # B, D, L
@@ -442,17 +456,26 @@ class MLP_LSTM_Block(nn.Module):
         return out
 
 class MLP_LSTM_Decoder(nn.Module):
-    def __init__(self, dim=768, drop=0., activation=nn.GELU, bidirectional=True, add_residual=True, num_layers=2, drop_masked_tokens=True, **kwargs):
+    def __init__(self, dim=768, drop=0., activation=nn.GELU, bidirectional=True, add_residual=True, num_layers=2, drop_masked_tokens=True, informed_masking=False, **kwargs):
         super().__init__()
         self.blocks = nn.Sequential(*[MLP_LSTM_Block(dim, drop, activation, bidirectional, add_residual) for _ in range(num_layers)])
         self.mask_token = nn.Parameter(torch.randn(1, 1, dim) * 0.02)
         self.drop_masked_tokens = drop_masked_tokens
-
-    def forward(self, x, length=None, ids_keep_sorted=None):
-        if self.drop_masked_tokens:  # default EAT where the student only processes unmasked tokens.
-            x_decoder = self.mask_token.repeat(x.shape[0], length, 1)
-            x_decoder.scatter_(1, ids_keep_sorted, x)
-        else:  # we did not drop the masked tokens in the student encoder and the shape is correct.
+        self.informed_masking = informed_masking
+        
+    def forward(self, x, mask_info):
+        if self.drop_masked_tokens:
+            if self.informed_masking:  # our modification
+                index = mask_info['restore_indices_for_decoder']  # B, 256
+                index = index.unsqueeze(2).expand(-1, -1, x.shape[2]).to(x.device)  # B, 256, D
+                x_decoder = torch.gather(x, dim=1, index=index)
+            else:  # default EAT where the student only processes unmasked tokens.
+                index = mask_info['ids_keep_sorted']  # B, 51
+                index = index.unsqueeze(2).expand(-1, -1, x.shape[2]).to(x.device)
+                length = mask_info['mask'].shape[1]  # L = 256
+                x_decoder = self.mask_token.repeat(x.shape[0], length, 1)
+                x_decoder.scatter_(1, index, x)
+        else:  # we did not drop the masked tokens in the student encoder and everything is in correct order.
             x_decoder = x
         return self.blocks(x_decoder)
         
@@ -620,12 +643,14 @@ class PatchEmbed(nn.Module):
 
 class ViT_MaskedEncoder(nn.Module):
     def __init__(self, input_shape=(512, 128), patch_size=(16, 16), embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True, drop=0., attn_drop=0., drop_path_rate=0.,
-                 pos_trainable=False, clone_size=16, mode='student', mask_mode='inv', use_rope=False, drop_masked_tokens=True):
+                 pos_trainable=False, clone_size=16, mode='student', mask_mode='inv', use_rope=False, drop_masked_tokens=True, informed_masking=False):
         super().__init__()
         
         assert mode in ['student', 'teacher']
         assert mask_mode in ['rand', 'inv']
         assert (input_shape[0] % patch_size[0]) == 0 and (input_shape[1] % patch_size[1]) == 0
+        if informed_masking:
+            assert drop_masked_tokens, "set drop_masked_tokens to True if you want informed masking."
         
         if mode == 'student':
             self.forward_fn = self.student_forward
@@ -639,6 +664,7 @@ class ViT_MaskedEncoder(nn.Module):
 
         self.use_rope = use_rope
         self.drop_masked_tokens = drop_masked_tokens
+        self.informed_masking = informed_masking
         self.clone_size = clone_size
         self.patch_size = patch_size
         self.patch_embed = PatchEmbed(input_shape, patch_size, 1, embed_dim)
@@ -656,7 +682,7 @@ class ViT_MaskedEncoder(nn.Module):
     def inverse_block_mask(self, shape, mask_ratio=0.8, mask_length=5, mask_prob_adjust=0.07, require_same_masks=True):
         
         if mask_ratio == 0:
-            return None, None
+            return None
         
         assert mask_length > 1
         
@@ -703,22 +729,25 @@ class ViT_MaskedEncoder(nn.Module):
         # now inverse_mask: 1 are places to remove, 0 are places to keep.
         mask = 1 - mask  
         mask = mask.to(torch.uint8)
-        ids_shuffle = mask.argsort(dim=1)
-        len_keep = L - mask[0].sum()
-        ids_keep = ids_shuffle[:, :len_keep]
-        
-        return mask.float(), ids_keep
+        ids_shuffle = mask.argsort(dim=1)  # zeros go before ones, but in random order
+        len_keep = L - mask[0].sum()  # anything after len_keep is 1 since all masks have the same size/ratio of 1 & 0
+        ids_keep = ids_shuffle[:, :len_keep]  # indices of 0, all the places we keep in sequence
+        ids_keep_sorted, _ = ids_keep.sort(dim=1)  # sort the indices
+        mask_info = {'mask': mask, 'ids_keep_sorted': ids_keep_sorted}
+        if self.informed_masking:
+            mask_info = mask_info | self.make_masking_informative(ids_keep_sorted, last_index=L-1, mask_token_index=L)    
+        return mask_info
     
     def random_masking(self, shape, mask_ratio=0.8):
         
         if mask_ratio == 0:
-            return None, None
+            return None
         
         B, L, D = shape  # batch, length, dim
         B *= self.clone_size
         
         len_keep = int(L * (1 - mask_ratio))    
-        noise = torch.rand(B, L, device=self.cls_token.device)  # noise in [0, 1]
+        noise = torch.rand(B, L, device=x.device)  # noise in [0, 1]
         
         # sort noise for each sample
         ids_shuffle = noise.argsort(dim=1)  # ascend: small is keep, large is remove
@@ -726,15 +755,83 @@ class ViT_MaskedEncoder(nn.Module):
         
         # keep the first subset
         ids_keep = ids_shuffle[:, :len_keep]
-        
+        ids_keep_sorted, _ = ids_keep.sort(dim=1)  # sort the indices
         # generate the binary mask: 0 is keep, 1 is remove
         mask = torch.ones([B, L])
         mask[:, :len_keep] = 0
         # unshuffle to get the binary mask
         mask = torch.gather(mask, dim=1, index=ids_restore)
+
+        mask_info = {'mask': mask, 'ids_keep_sorted': ids_keep_sorted}
+        if self.informed_masking:
+            mask_info = mask_info | self.make_masking_informative(ids_keep_sorted, last_index=L-1, mask_token_index=L)    
+        return mask_info
+
+    def make_masking_informative(self, ids_keep_sorted, last_index, mask_token_index):
+        ids_keep_sorted_with_gap = []
+        restore_indices_for_decoder = []
+        # at max, there are n-1 gaps to be filled between n tokens and + 2 boundaries -> 2n + 1 tokens
+        max_len = ids_keep_sorted.shape[1] * 2 + 1  # 103 for 256 tokens and 80% masking
         
-        return mask, ids_keep
+        for i in range(ids_keep_sorted.shape[0]):
+            extended_idx_set = []  # to inform the student about gaps
+            restore_idx_set = []  # to restor the decoder input from the dropped masked sequence
+            index_counter = 0  # index tracker helper to know how many times fill the gaps with each masked position
+        
+            idx_set_i = ids_keep_sorted[i]
+        
+            # put a mask token at the left boundary
+            extended_idx_set.append(mask_token_index)
+            
+            # if the first keep index is not zero, repeat the 0 index as gap until reaching the first selected index
+            for _ in range(idx_set_i[0]):
+                restore_idx_set.append(index_counter)
+            # move the index counter to position 1
+            index_counter += 1
+            
+            # add the first index we want from the original input
+            extended_idx_set.append(idx_set_i[0].item())
+            restore_idx_set.append(index_counter)
+            index_counter += 1  # move the counter by one after adding every unmasked token index 
+            
+            # now iterate over all input indices that we are going to keep, starting from the second index
+            for j in range(1, idx_set_i.shape[0]):
+                # gaps between the current keep index and the previous one
+                gap_size = idx_set_i[j] - idx_set_i[j-1] - 1  # -1 to exclude the current token itself
+                if gap_size > 0:  # there are missing indices here
+                    # inform that there is a gap between these two tokens
+                    extended_idx_set.append(mask_token_index)
+                    for _ in range(gap_size):  # fill the gaps with the mask token index
+                        restore_idx_set.append(index_counter)
+                    index_counter += 1  # move the counter
+                # add the unmasked input token index after filling the potential gaps
+                extended_idx_set.append(idx_set_i[j].item())
+                restore_idx_set.append(index_counter)
+                index_counter += 1
                 
+            # put a mask token at the right boundary
+            extended_idx_set.append(mask_token_index)
+        
+            # if the last keep index is not the final index, repeat the final gaps until reaching the original sequence length
+            # restore_idx_set should contain where the unmasked tokens are in the dropped sequence with appropriate number of repeatition of masked tokens in between
+            # note that its content has indices relative to the dropped sequence length but it has the same length as input to restore the decoder input
+            for _ in range(last_index - idx_set_i[-1]):
+                restore_idx_set.append(index_counter)
+            # index_counter += 1  # not necessary to move it anymore
+            assert len(restore_idx_set) == last_index + 1
+            
+            # if needed, append extra mask tokens to make all sequences the same size for batching
+            num_missing_tokens_for_batching = max_len - len(extended_idx_set)
+            extended_idx_set = extended_idx_set + num_missing_tokens_for_batching * [mask_token_index]
+        
+            ids_keep_sorted_with_gap.append(extended_idx_set)
+            restore_indices_for_decoder.append(restore_idx_set)
+        
+        mask_info = {'ids_keep_sorted_with_gap': torch.tensor(ids_keep_sorted_with_gap).long(),  # B, 103
+                     'restore_indices_for_decoder': torch.tensor(restore_indices_for_decoder).long(),  # B, 256
+                    }
+        return mask_info
+    
     def student_forward(self, x, mask_ratio=None):
         x = self.patch_embed(x)  # B, 1, T, F -> B, L=256, D=768
         
@@ -742,21 +839,28 @@ class ViT_MaskedEncoder(nn.Module):
             x = x + self.pos_embed[:, 1:, :]
         
         # generate masks of shape: (B*clone_size, L)
-        mask, ids_keep = self.mask_fn(x.shape, mask_ratio)
-        ids_keep_sorted, _ = ids_keep.sort(dim=1)  # safe even if you expand first since the last dimesion is the repeatition of the second dimension index
-        mask, ids_keep_sorted = mask.to(x), ids_keep_sorted.unsqueeze(-1).expand(-1, -1, x.shape[2]).to(x.device)
+        mask_info = self.mask_fn(x.shape, mask_ratio)
 
         # repeat the inputs for clone_size on batch axis
         x = x.repeat_interleave(self.clone_size, dim=0)
 
         # mask the input
         if self.drop_masked_tokens:
-            x = torch.gather(x, dim=1, index=ids_keep_sorted)  # B * clone_size, L * (1 - mask_ratio), D
-        else:
-            mask = mask.unsqueeze(2)  # B, L, 1
+            if self.informed_masking:
+                index = mask_info['ids_keep_sorted_with_gap']
+                index = index.unsqueeze(-1).expand(-1, -1, x.shape[2]).to(x.device)
+                # append a mask token to x
+                mask_tokens = 0.1 * torch.randn(x.shape[0], 1, x.shape[2]).to(x)
+                x = torch.cat([x, mask_tokens], dim=1)
+                x = torch.gather(x, dim=1, index=index)  # B * clone_size, 2*n + 1, D where n = L * (1 - mask_ratio); 
+            else:
+                index = mask_info['ids_keep_sorted']
+                index = index.unsqueeze(-1).expand(-1, -1, x.shape[2]).to(x.device)
+                x = torch.gather(x, dim=1, index=index)  # B * clone_size, L * (1 - mask_ratio), D
+        else:  # keep the full sequence length with all the masked positions
+            mask = mask_info['mask'].unsqueeze(2).to(x)  # B, L, 1
             mask_keep = 1. - mask  # now 1 is keep and 0 is drop
             x = (x * mask_keep) + (mask * torch.randn_like(x) * 0.1)
-            mask = mask.squeeze(2)
         
         # append cls token
         if not self.use_rope:
@@ -775,7 +879,7 @@ class ViT_MaskedEncoder(nn.Module):
         cls_tokens = x[:, 0]
         patch_tokens = x[:, 1:]
         
-        return cls_tokens, patch_tokens, mask, ids_keep_sorted
+        return cls_tokens, patch_tokens, mask_info
 
     def teacher_forward(self, x, mask_ratio=None):
         x = self.patch_embed(x)  # B, C=1, T=512, F=128 -> B, L=256, D=768
@@ -813,6 +917,7 @@ class EAT_Student(nn.Module):
                  use_rope=False,
                  mask_mode='inv',
                  drop_masked_tokens=True,
+                 informed_masking=False,
                  cls_task='regression',
                  dinohead_kwargs={'out_dim': 65536, 'use_bn': False, 'nlayers': 3, 'hidden_dim': 2048, 'bottleneck_dim': 256, 'mlp_bias': True},
                  decoder_cls=CNN2dDecoder,
@@ -823,10 +928,11 @@ class EAT_Student(nn.Module):
         assert cls_task in ['regression', 'clustering']
         self.use_rope = use_rope
         self.drop_masked_tokens = drop_masked_tokens
+        self.informed_masking = informed_masking
         self.cls_task = cls_task
         self.clone_size = clone_size
-        self.encoder = ViT_MaskedEncoder(input_shape, patch_size, embed_dim, depth, num_heads, mlp_ratio, qkv_bias, drop, attn_drop, drop_path_rate, pos_trainable,
-                                         clone_size, mode='student', mask_mode=mask_mode, use_rope=use_rope, drop_masked_tokens=drop_masked_tokens)
+        self.encoder = ViT_MaskedEncoder(input_shape, patch_size, embed_dim, depth, num_heads, mlp_ratio, qkv_bias, drop, attn_drop, drop_path_rate, pos_trainable, clone_size,
+                                         mode='student', mask_mode=mask_mode, use_rope=use_rope, drop_masked_tokens=drop_masked_tokens, informed_masking=informed_masking)
         if cls_task == 'clustering':
             dinohead_kwargs['in_dim'] = embed_dim
             self.head = DINOHead(**dinohead_kwargs)
@@ -834,6 +940,7 @@ class EAT_Student(nn.Module):
         decoder_kwargs['num_time_patches'] = self.encoder.patch_embed.patch_ft[1]
         decoder_kwargs['dim'] = embed_dim
         decoder_kwargs['drop_masked_tokens'] = drop_masked_tokens
+        decoder_kwargs['informed_masking'] = informed_masking
         self.decoder = decoder_cls(**decoder_kwargs)
         self.initialize_weights()
         
@@ -858,10 +965,9 @@ class EAT_Student(nn.Module):
         args:
             x - input mel-spectrogram of shape B, 1, T, F 
         """
-        cls_tokens, patch_tokens, mask, ids_keep_sorted = self.encoder(x, mask_ratio)
-        length = mask.shape[1]
-        patch_tokens = self.decoder(patch_tokens, length, ids_keep_sorted)
-        return cls_tokens, patch_tokens, mask
+        cls_tokens, patch_tokens, mask_info = self.encoder(x, mask_ratio)
+        patch_tokens = self.decoder(patch_tokens, mask_info)
+        return cls_tokens, patch_tokens, mask_info
 
     
 # Teacher model for EAT
@@ -949,7 +1055,6 @@ class DINOHead(nn.Module):
         nlayers = max(nlayers, 1)
         self.mlp = self._build_mlp(nlayers, in_dim, bottleneck_dim, hidden_dim=hidden_dim, use_bn=use_bn, bias=mlp_bias)
         self.apply(self._init_weights)
-        # I do not know if doing this is necessary or not, they did it, so let's keep it.
         self.last_layer = nn.utils.parametrizations.weight_norm(nn.Linear(bottleneck_dim, out_dim, bias=False))
         self.last_layer.parametrizations.weight.original0.data.fill_(1)
 
@@ -1087,7 +1192,7 @@ class KoLeoLoss(nn.Module):
 
 def var_loss(x):
     """
-    x - student logits (B, D)
+    x - student CLS or flattened patch logits (B, D)
     """
     x_centered = x - x.mean(dim=0)
     s = torch.sqrt(x_centered.var(dim=0) + 0.0001)
