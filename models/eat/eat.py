@@ -9,7 +9,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from util.pos_embed import get_2d_sincos_pos_embed_flexible
-from rotary_embedding_torch import RotaryEmbedding
+from .rotary_embedding_torch import RotaryEmbedding
 import lightning as L
 import hydra
 from timm.optim.optim_factory import param_groups_weight_decay
