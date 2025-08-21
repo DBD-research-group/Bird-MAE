@@ -58,10 +58,12 @@ srun python pretrain.py \
 exit_code=$?
 if [ $exit_code -ne 0 ]; then
     echo "Training failed with exit code $exit_code, sleeping for 15 hours..."
-    sleep 54000  # 15 hours = 15 * 60 * 60 = 54000 seconds
+    sleep 54000  # 15h on failure
 else
-    echo "Training completed successfully!"
+    echo "Training completed successfully! Sleeping for 3 hours..."
+    sleep 54000  # 3h on success
 fi
 
 echo "Finished script."
+
 
