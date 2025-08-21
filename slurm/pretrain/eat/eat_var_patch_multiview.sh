@@ -5,8 +5,8 @@
 #SBATCH --gres=gpu:8
 #SBATCH --mem=150gb
 #SBATCH --partition=main
-#SBATCH --job-name=eat_base_xcl_var_patched_multiview_8
-#SBATCH --output=/mnt/work/bird2vec/logs/eat/eat_base_var_patched_multiview_8.log
+#SBATCH --job-name=eat_base_xcl_var_patched_multiview_8_resume
+#SBATCH --output=/mnt/work/bird2vec/logs/eat/eat_base_var_patched_multiview_8_resume.log
 #SBATCH --time=6-15:00:00  
 ###SBATCH --exclude=gpu-v100-3
 #SBATCH --nodelist=gpu-l40s-1
@@ -47,6 +47,7 @@ srun python pretrain.py \
         module.network.task.use_teacher_assistant=false \
         module.network.compile_mode=null \
         module.network.task.multi_view=true \
+        ckpt_path=/mnt/work/bird2vec/logs_pretrain_eat/eat_base_xcl_var_patch_multiview/runs/XCL/EAT/2025-08-15_183922/callback_checkpoints/last.ckpt
         #data.dataset.save_to_disk="/scratch/birdset/XCL/XCL_processed_500_2events_ogg_addsoundscapes-hsn" \
         #trainer.strategy=ddp_find_unused_parameters_true \
         ##ckpt_path="/mnt/work/bird2vec/logs_pretrain_audioset_MAE/pretrain_xcl_large_swin/runs/XCL/AudioMAE/2024-12-12_162203/callback_checkpoints/last.ckpt"
