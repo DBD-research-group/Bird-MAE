@@ -203,7 +203,9 @@ class EAT(L.LightningModule):
         cache = {}
         
         # student output shapes: (B=batch_size*clone_size*views, D=768), (B, L=256, D), (B, L)
-        cache['student_cls_tokens'], cache['student_patch_tokens'], cache['mask'] = self.student(x, mask_ratio)
+        cache['student_cls_tokens'], cache['student_patch_tokens'], mask_info = self.student(x, mask_ratio)
+        cache['mask'] = mask_info['mask']
+        cache['mask_info'] = mask_info
             
         with torch.no_grad():
             teacher_cls_tokens, cache['teacher_patch_tokens'] = self.teacher(x)  # (B, D), (B, L, D)
