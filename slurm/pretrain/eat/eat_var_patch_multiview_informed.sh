@@ -31,7 +31,7 @@ srun python pretrain.py \
         trainer.devices=8 \
         +trainer.num_nodes=1 \
         trainer.precision=16-mixed \
-        trainer.strategy=auto \
+        trainer.strategy=ddp_find_unused_parameters_true \
         data.transform.waveform_augmentations.mixup_wave.p=0.0 \
         trainer.max_epochs=60 \
         data.loaders.train.batch_size=16 \
@@ -49,6 +49,7 @@ srun python pretrain.py \
         module.network.task.multi_view=true \
         module.network.encoder.drop_masked_tokens=true \
         module.network.encoder.informed_masking=true \
+
         #data.dataset.save_to_disk="/scratch/birdset/XCL/XCL_processed_500_2events_ogg_addsoundscapes-hsn" \
         #trainer.strategy=ddp_find_unused_parameters_true \
         ##ckpt_path="/mnt/work/bird2vec/logs_pretrain_audioset_MAE/pretrain_xcl_large_swin/runs/XCL/AudioMAE/2024-12-12_162203/callback_checkpoints/last.ckpt"
