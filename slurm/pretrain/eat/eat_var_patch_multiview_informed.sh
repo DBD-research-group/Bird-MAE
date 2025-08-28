@@ -5,8 +5,8 @@
 #SBATCH --gres=gpu:8
 #SBATCH --mem=150gb
 #SBATCH --partition=main
-#SBATCH --job-name=eat_base_xcl_var_patched_multiview_8_informed
-#SBATCH --output=/mnt/work/bird2vec/logs/eat/eat_base_var_patched_multiview_8_informed.log
+#SBATCH --job-name=eat_base_xcl_var_patched_multiview_8_informed_clone8
+#SBATCH --output=/mnt/work/bird2vec/logs/eat/eat_base_var_patched_multiview_8_informed_clone8.log
 #SBATCH --time=6-15:00:00  
 ###SBATCH --exclude=gpu-v100-3
 #SBATCH --nodelist=gpu-l40s-1
@@ -34,7 +34,7 @@ srun python pretrain.py \
         trainer.strategy=ddp_find_unused_parameters_true \
         data.transform.waveform_augmentations.mixup_wave.p=0.0 \
         trainer.max_epochs=60 \
-        data.loaders.train.batch_size=16 \
+        data.loaders.train.batch_size=32 \
         data.loaders.train.num_workers=16 \
         data.loaders.train.pin_memory=true \
         +data.loaders.train.prefetch_factor=2 \
@@ -49,6 +49,7 @@ srun python pretrain.py \
         module.network.task.multi_view=true \
         module.network.encoder.drop_masked_tokens=true \
         module.network.encoder.informed_masking=true \
+        module.network.encoder.clone_size=8
 
         #data.dataset.save_to_disk="/scratch/birdset/XCL/XCL_processed_500_2events_ogg_addsoundscapes-hsn" \
         #trainer.strategy=ddp_find_unused_parameters_true \
