@@ -305,7 +305,7 @@ class EAT(L.LightningModule):
         loss_dict['train_loss'] = total_loss
         
         # batch_size = audio.shape[0] * self.student.clone_size
-        self.log_dict(loss_dict, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True, rank_zero_only=True, batch_size=audio.size(0))
+        self.log_dict(loss_dict, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True, batch_size=audio.size(0))
         self.training_step_count += 1
         
         return total_loss
