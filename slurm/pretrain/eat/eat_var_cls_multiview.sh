@@ -5,8 +5,8 @@
 #SBATCH --gres=gpu:8
 #SBATCH --mem=150gb
 #SBATCH --partition=main
-#SBATCH --job-name=eat_base_xcl_cls_multiview_8_n
-#SBATCH --output=/mnt/work/bird2vec/logs/eat/eat_base_cls_multiview_8_n.log
+#SBATCH --job-name=eat_base_xcl_cls_multiview_8_nnn
+#SBATCH --output=/mnt/work/bird2vec/logs/eat/eat_base_cls_multiview_8_nnn.log
 #SBATCH --time=6-15:00:00  
 ###SBATCH --exclude=gpu-v100-3
 #SBATCH --nodelist=gpu-l40s-1
@@ -25,6 +25,12 @@ cd /mnt/home/lrauch/projects/birdMAE/
 # export HYDRA_FULL_ERROR=1
 
 hostname
+
+# Increase NCCL timeout and enable debug logging
+export NCCL_TIMEOUT=3600
+export NCCL_DEBUG=INFO
+export NCCL_ASYNC_ERROR_HANDLING=1
+
 srun python pretrain.py \
         experiment=eat/pretrain_xcl_eat_base.yaml \
         task_name="eat_base_xcl_var_patch_multiview" \
@@ -35,9 +41,9 @@ srun python pretrain.py \
         data.transform.waveform_augmentations.mixup_wave.p=0.0 \
         trainer.max_epochs=60 \
         data.loaders.train.batch_size=32 \
-        data.loaders.train.num_workers=16 \
+        data.loaders.train.drop_last=true \
+        data.loaders.train.num_workers=8 \
         data.loaders.train.pin_memory=true \
-        +data.loaders.train.prefetch_factor=2 \
         trainer.gradient_clip_val=1.0 \
         module.optimizer.target.lr=5e-4 \
         module.network.task.cls_task="regression" \
@@ -46,7 +52,7 @@ srun python pretrain.py \
         module.network.task.regularize_patch_tokens=false \
         module.network.task.use_teacher_assistant=false \
         module.network.compile_mode=null \
-        module.network.task.multi_view=true \
+        module.network.task.multi_view=false \
         #ckpt_path=/mnt/work/bird2vec/logs_pretrain_eat/eat_base_xcl_var_patch_multiview/runs/XCL/EAT/2025-08-15_183922/callback_checkpoints/last.ckpt
         #data.dataset.save_to_disk="/scratch/birdset/XCL/XCL_processed_500_2events_ogg_addsoundscapes-hsn" \
         #trainer.strategy=ddp_find_unused_parameters_true \
